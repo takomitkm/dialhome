@@ -135,11 +135,11 @@ Host winbox
 ```
 magpie-tunnel/
   README.md                 ← 你在这里
-  FAST-PATH.md              早期版快路径（历史，README 取代它）
-  RUNBOOK.md                第一轮 GO 手册 + 上游取舍（历史）
   docs/
     PITFALLS.md             ★ 25+ 条症状→根因→修法，动手前先读
-    STATUS.md               实测记录：证过什么、还没做什么
+    STATUS.md               实测记录：证过什么、还没做什么（含现场取证一行命令）
+    FAST-PATH.md            早期版快路径（历史，README 取代它）
+    RUNBOOK.md              第一轮 GO 手册 + 上游取舍（历史）
     magpie-remote-provider-research.md   magpie remote provider 机制调研
   relay/                    relay（Linux）侧脚本
     stage-relay.sh          一次性布置介质/授权
