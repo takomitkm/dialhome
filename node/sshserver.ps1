@@ -1,40 +1,56 @@
-# sshserver-102.ps1 -- portable (rootless) sshd on this Windows box + a separate reverse tunnel to 102.
+# sshserver.ps1 -- portable (rootless) sshd on this Windows box + reverse channels to a Linux relay.
 #
-# Same shape as the school-box installer in S:\apps\llm\agentwork\tunnel\server_sshd_setup.ps1,
-# re-pointed at the 102 relay:
-#   sshd      : portable OpenSSH from the Win32-OpenSSH zip, 127.0.0.1:19022 only, key-only login
-#   tunnel    : a SECOND, separate connection carrying -R 127.0.0.1:13437 on 102 -> this box 19022
+#   sshd      : portable OpenSSH from the Win32-OpenSSH zip, 127.0.0.1:<LocalPort> only, key-only
+#   ssh chan  : a SEPARATE ssh connection carrying -R 127.0.0.1:<RemotePort> on the relay -> this box
+#   magpie    : optional SECOND channel -R 127.0.0.1:<MagpiePort> -> this box 3425 (gateway)
 #   autostart : Startup-folder shortcuts (user scope; schtasks /SC ONLOGON would need admin)
 #   retry     : fast at first, then exactly one attempt per hour, forever
 #
 # No admin, no UAC, no service, no system sshd needed. Safe to re-run: every step is guarded.
+#
+# Normally you do NOT run this by hand: relay/enroll.sh mints a per-node key + ports and emits a
+# caller that invokes this script with -KeyB64 / -RemotePort / -MagicPort / -KeyRel.
+param(
+    [string]$Root = '',
+    [string]$RelayHost = '10.101.54.192',
+    [int]$RelayPort = 18322,
+    [string]$RelayUser = 'user',
+    [int]$LocalPort = 19022,
+    [int]$RemotePort = 13437,
+    [int]$MagpiePort = 0,
+    [string]$IdentityFile = '',
+    [string]$KeyB64 = '',
+    [string]$KeyRel = '',
+    [string]$LoginPubKey = '',
+    [switch]$NoAutostart
+)
 $ErrorActionPreference = 'Continue'
 
-$Root        = if (Test-Path 'D:\') { 'D:\zc\sshd' } else { Join-Path $env:USERPROFILE 'sshserver' }
+if ([string]::IsNullOrWhiteSpace($Root)) {
+    $Root = if (Test-Path 'D:\') { 'D:\zc\sshd' } else { Join-Path $env:USERPROFILE 'sshserver' }
+}
 $Bin         = Join-Path $Root 'OpenSSH-Win64'
 $Zip         = Join-Path $Root 'OpenSSH-Win64.zip'
 $Sha         = '23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5'
 $Url         = 'https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64.zip'
-$RelayHost   = '10.101.54.192'
-$RelayPort   = '18322'
-$RelayUser   = 'user'
-$LocalPort   = '19022'
-$RemotePort  = '13437'
-# 102's login key (private half stays on 102). Full shell: no command= restriction.
-$LoginPubKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPq5SH7C8YfxCoECXFaBpGNsgJLd2buefJ6cYO5CKGkF win-ssh-from-102'
+# The relay's login key (private half stays on the relay). Full shell: no command= restriction.
+if ([string]::IsNullOrWhiteSpace($LoginPubKey)) {
+    $LoginPubKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPq5SH7C8YfxCoECXFaBpGNsgJLd2buefJ6cYO5CKGkF win-ssh-from-102'
+}
 $AkOpt       = 'no-agent-forwarding,no-X11-forwarding,no-user-rc '
-$KeyRel      = '.magpie-connector/nodes/win2/id_ed25519_win2_13435'
+$idKey       = if ($IdentityFile) { $IdentityFile } else { Join-Path $Root 'node_key' }
 
 function P($k, $v) { Write-Output (([string]$k) + ' = ' + ([string]$v)) }
 $me = $env:USERNAME
 $meFull = if ($env:USERDOMAIN) { $env:USERDOMAIN + '\' + $me } else { $me }
 
 New-Item -ItemType Directory -Force -Path $Root | Out-Null
+P 'NODE' ($env:COMPUTERNAME + '\' + $me)
 P 'ROOT' $Root
-P 'ACCOUNT' $meFull
 P 'RELAY' ($RelayUser + '@' + $RelayHost + ':' + $RelayPort)
-P 'LISTEN' ('127.0.0.1:' + $LocalPort)
-P 'REMOTE-ON-102' ('127.0.0.1:' + $RemotePort)
+P 'SSHD' ('127.0.0.1:' + $LocalPort)
+P 'SSH-CHAN' ('relay 127.0.0.1:' + $RemotePort)
+if ($MagpiePort -gt 0) { P 'MAGPIE-CHAN' ('relay 127.0.0.1:' + $MagpiePort) }
 
 # ---------- 1) portable binaries ----------
 if (-not (Test-Path (Join-Path $Bin 'sshd.exe'))) {
@@ -131,46 +147,84 @@ P 'BANNER' (& {
     } catch { 'CONNECT FAIL ' + $_.Exception.Message } finally { $tc.Close() }
 })
 
-# ---------- 6) tunnel identity (the restricted key we already distribute) ----------
-$keyDir = Join-Path $env:LOCALAPPDATA 'magpie-connector\secrets'
-$idKey = Join-Path $keyDir 'id_ed25519_win2_13435'
+# ---------- 6) the node key (enroll hands it over inline; otherwise pull it from the relay) ----------
 if (-not (Test-Path $idKey)) {
-    New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
-    & scp.exe -P $RelayPort ('{0}@{1}:{2}' -f $RelayUser, $RelayHost, $KeyRel) $idKey
-    if (Test-Path $idKey) { P 'KEY-FETCH' 'pulled from 102 (102 password was asked once)' } else { P 'KEY-FETCH' 'FAIL' }
-} else { P 'KEY-FETCH' 'already present' }
+    if ($KeyB64) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $idKey) | Out-Null
+        [IO.File]::WriteAllBytes($idKey, [Convert]::FromBase64String($KeyB64))
+        P 'KEY' 'written from -KeyB64 (enroll mode)'
+    } elseif ($KeyRel) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $idKey) | Out-Null
+        & scp.exe -P $RelayPort ('{0}@{1}:{2}' -f $RelayUser, $RelayHost, $KeyRel) $idKey
+        if (Test-Path $idKey) { P 'KEY' 'pulled from the relay (password asked once)' } else { P 'KEY' 'FAIL' }
+    } else {
+        P 'KEY' 'MISSING - pass -KeyB64 or -KeyRel'
+    }
+} else { P 'KEY' 'already present' }
 if (Test-Path $idKey) {
     & (Join-Path $env:SystemRoot 'System32\icacls.exe') $idKey '/inheritance:r' '/grant:r' ($meFull + ':F') 2>$null | Out-Null
     P 'KEY-USABLE' ((& (Join-Path $Bin 'ssh-keygen.exe') -y -P '""' -f $idKey 2>&1) -match 'ssh-ed25519')
 }
 
-# ---------- 7) separate tunnel connection, hourly retry after the first few tries ----------
-$knownHosts = Join-Path $keyDir 'known_hosts'
+# ---------- 7) one supervisor per channel: separate ssh connections, hourly retry after 5 fails ----------
+$knownHosts = Join-Path $Root 'known_hosts'
 if (-not (Test-Path $knownHosts)) { Set-Content -LiteralPath $knownHosts -Value '' -Encoding ascii }
+# channels: sshd first, then (optionally) the magpie gateway. One connection each, so a refused
+# port can never take the other channel down.
+$channels = @(
+    [pscustomobject]@{ Name = 'ssh'; Remote = $RemotePort; Target = $LocalPort },
+    [pscustomobject]@{ Name = 'magpie'; Remote = $MagpiePort; Target = 3425 }
+) | Where-Object { $_.Remote -gt 0 }
+
 $tun = Join-Path $Root 'start-tunnel.ps1'
 $t = @(
     '$ErrorActionPreference = ''Continue'''
     '$ring = ' + "'" + ($idKey -replace '\\', '\\') + "'"
     '$kh = ' + "'" + ($knownHosts -replace '\\', '\\') + "'"
-    '$err = ' + "'" + ((Join-Path $Root 'tunnel.err') -replace '\\', '\\') + "'"
-    '$pidfile = ' + "'" + ((Join-Path $Root 'tunnel.pid') -replace '\\', '\\') + "'"
-    'if (Test-Path $pidfile) { $old = Get-Content -LiteralPath $pidfile -First 1; if ($old -and $old -ne "$PID") { $p = Get-Process -Id ([int]$old) -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -match "^p") { exit 0 } } }'
-    'Set-Content -LiteralPath $pidfile -Value $PID -Encoding ascii'
-    '$wait = 5; $fails = 0'
+    '$root = ' + "'" + ($Root -replace '\\', '\\') + "'"
+    '$relay = ' + "'" + ($RelayUser + '@' + $RelayHost) + "'"
+    '$relayPort = ' + $RelayPort
+    '$ssh = "$env:SystemRoot\System32\OpenSSH\ssh.exe"'
+    '$chans = @('
+    ($channels | ForEach-Object { '  @{ Name = ''' + $_.Name + '''; Remote = ' + $_.Remote + '; Target = ' + $_.Target + ' }' })
+    ')'
+    '$state = @{}'
+    'foreach ($c in $chans) { $state[$c.Name] = @{ Proc = $null; Wait = 5; Fails = 0 } }'
     'while ($true) {'
-    '  Start-Sleep -Seconds $wait'
-    '  & "$env:SystemRoot\System32\OpenSSH\ssh.exe" -N -R 127.0.0.1:' + ($RemotePort + ':127.0.0.1:' + $LocalPort) + ' -p ' + $RelayPort + ' -i $ring -o BatchMode=yes -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$kh ' + ($RelayUser + '@' + $RelayHost) + ' 2>> $err'
-    '  $rc = $LASTEXITCODE; $fails++'
-    '  Add-Content -LiteralPath $err -Value ("tunnel exited rc=" + $rc + " at " + (Get-Date -Format s) + " (attempt #" + $fails + ")")'
-    '  if ($rc -eq 0) { $wait = 5 }'
-    '  elseif ($fails -ge 5) { $wait = 3600; Add-Content -LiteralPath $err -Value "5 failures -> one retry per hour from now on" }'
-    '  else { $wait = [Math]::Min(60, $wait * 2) }'
+    '  foreach ($c in $chans) {'
+    '    $s = $state[$c.Name]'
+    '    if ($s.Proc -and -not $s.Proc.HasExited) { continue }'
+    '    if ($s.Proc) {'
+    '      $err = Join-Path $root ("tunnel-" + $c.Name + ".err")'
+    '      Add-Content -LiteralPath $err -Value ("exited rc=" + $s.Proc.ExitCode + " at " + (Get-Date -Format s) + " (attempt #" + $s.Fails + ")")'
+    '    }'
+    '    Start-Sleep -Seconds $s.Wait'
+    '    $s.Fails++'
+    '    $err = Join-Path $root ("tunnel-" + $c.Name + ".err")'
+    '    $s.Proc = Start-Process -FilePath $ssh -PassThru -WindowStyle Hidden -RedirectStandardError $err -ArgumentList @('
+    '      "-N", "-R", ("127.0.0.1:" + $c.Remote + ":127.0.0.1:" + $c.Target),'
+    '      "-p", "$relayPort", "-i", $ring,'
+    '      "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ConnectTimeout=10",'
+    '      "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",'
+    '      "-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=$kh", $relay)'
+    '    if ($s.Proc.HasExited) {'
+    '      $s.Wait = if ($s.Fails -ge 5) { 3600 } else { [Math]::Min(60, $s.Wait * 2) }'
+    '      Add-Content -LiteralPath $err -Value ("retry in " + $s.Wait + "s")'
+    '    } else {'
+    '      $s.Wait = 5; $s.Fails = 0'
+    '      Add-Content -LiteralPath $err -Value ("connected " + (Get-Date -Format s) + " -> " + $c.Name + " on relay 127.0.0.1:" + $c.Remote)'
+    '    }'
+    '  }'
+    '  Start-Sleep -Seconds 10'
     '}'
 )
 Set-Content -LiteralPath $tun -Value $t -Encoding ascii
 Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $tun -WindowStyle Hidden
-Start-Sleep -Seconds 5
-P 'TUNNEL-ERR-LAST' (((Get-Content -LiteralPath (Join-Path $Root 'tunnel.err') -Tail 2 -ErrorAction SilentlyContinue) -join ' // ') -replace '\s+', ' ')
+Start-Sleep -Seconds 6
+foreach ($c in $channels) {
+    $errFile = Join-Path $Root ('tunnel-' + $c.Name + '.err')
+    P ('CHAN-' + $c.Name + '-ERR') (((Get-Content -LiteralPath $errFile -Tail 2 -ErrorAction SilentlyContinue) -join ' // ') -replace '\s+', ' ')
+}
 
 # ---------- 8) autostart at logon (Startup folder; no admin needed) ----------
 $sm = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
