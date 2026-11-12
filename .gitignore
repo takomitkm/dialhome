@@ -1,0 +1,8 @@
+﻿# never commit keys, payloads or per-node state
+nodes/
+secrets/
+*.b64
+*.zip
+*.log
+*.err
+.tmp/

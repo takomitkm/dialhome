@@ -1,0 +1,27 @@
+{
+  "ssh": {
+    "host": "",
+    "port": 22,
+    "user": "",
+    "identityFile": "",
+    "knownHostsFile": ""
+  },
+  "tunnel": {
+    "remoteBindAddress": "127.0.0.1",
+    "remotePort": 13425
+  },
+  "magpie": {
+    "defaultPort": 3425,
+    "healthPath": "/api/hello",
+    "extraCandidatePorts": []
+  },
+  "reconnect": {
+    "initialDelaySeconds": 5,
+    "maxDelaySeconds": 60,
+    "discoverEverySeconds": 30
+  },
+  "log": {
+    "maxBytes": 1048576,
+    "keep": 2
+  }
+}
