@@ -122,6 +122,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _pserr(self, code, msg):
+        """Errors come back as VALID PowerShell: the client does iex(curl ...), so a
+        plain-text error would explode as 'command not found'. A comment + a
+        Write-Host hint degrades to one readable yellow line instead."""
+        body = "# dialhome bootstrap: %s\nWrite-Host '[dialhome] %s' -ForegroundColor Yellow\n" % (msg, msg)
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body.encode("utf-8"))))
+        self.end_headers()
+        self.wfile.write(body.encode("utf-8"))
+
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         ip = self.client_address[0]
@@ -129,20 +140,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
         w = [t for t in window.get(ip, []) if now - t < RATE_WINDOW]
         if len(w) >= RATE_MAX:
             log(f"RATE ip={ip}")
-            return self._text(429, "slow down\n")
+            return self._pserr(429, "slow down, try again in a minute")
         w.append(now)
         window[ip] = w
 
         if u.path == "/healthz":
             return self._text(200, "ok\n")
         if u.path != "/i":
-            return self._text(404, "not found\n")
+            return self._pserr(404, "unknown path (use /i?t=<token>)")
 
         q = urllib.parse.parse_qs(u.query)
         given = (q.get("t") or [""])[0]
         if not given or not hmac.compare_digest(given, read_token()):
             log(f"DENY ip={ip} bad-token")
-            return self._text(403, "bad token\n")
+            return self._pserr(403, "bad token - copy the real one from dialhome-onboard.cmd (TOKEN= line)")
 
         if q.get("f"):
             # hardware fingerprint (client-side SHA256 of UUID/MACs, 16 hex): identity
@@ -152,7 +163,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # it through the encrypted channel once the node is reachable.
             fp = (q.get("f") or [""])[0]
             if not fp.isalnum() or len(fp) > 32:
-                return self._text(400, "bad fingerprint\n")
+                return self._pserr(400, "bad fingerprint parameter")
             name, reused = name_for_fingerprint(fp.lower(), ip)
             log(f"{'REUSE' if reused else 'NEW'} fp={fp} name={name} ip={ip}")
         elif q.get("n"):
@@ -169,12 +180,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                text=True, timeout=60)
         except subprocess.TimeoutExpired:
             log(f"TIMEOUT name={name} ip={ip}")
-            return self._text(504, "enroll timeout\n")
+            return self._pserr(504, "enroll timed out on the relay, try again")
 
         out = r.stdout or ""
         if len(out) < 2000 or "FromBase64String" not in out:
             log(f"FAIL name={name} ip={ip} err={r.stderr[-200:]!r}")
-            return self._text(500, "enroll failed: " + (r.stderr or "")[-300:] + "\n")
+            return self._pserr(500, "enroll failed on the relay: " + ((r.stderr or "")[-160:].replace(chr(10), " ")))
 
         log(f"OK name={name} ip={ip} bytes={len(out)}")
         self._text(200, out)
