@@ -12,6 +12,7 @@
 # caller that invokes this script with -KeyB64 / -RemotePort / -MagicPort / -KeyRel.
 param(
     [string]$Root = '',
+    [string]$ScriptDirOverride = '',
     [string]$RelayHost = '10.101.54.192',
     [int]$RelayPort = 18322,
     [string]$RelayUser = 'user',
@@ -140,29 +141,15 @@ $lines = @(
 Set-Content -LiteralPath $cfg -Value $lines -Encoding ascii
 P 'CONFIG-TEST' (((& (Join-Path $Bin 'sshd.exe') -t -f $cfg 2>&1 | Out-String) -replace '\s+', ' ') + ' rc=' + $LASTEXITCODE)
 
-# ---------- 5) start sshd (skips if 19022 already listening) ----------
-$starter = Join-Path $Root 'start-sshd.ps1'
-$s = @(
-    '$ErrorActionPreference = ''Continue'''
-    '$b = ' + "'" + ($Bin -replace '\\', '\\') + "'"
-    '$c = ' + "'" + ($cfg -replace '\\', '\\') + "'"
-    '$lg = ' + "'" + ((Join-Path $Root 'sshd.log') -replace '\\', '\\') + "'"
-    '$l = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, ' + $LocalPort + ')'
-    'try { $l.Start(); $l.Stop() } catch { exit 0 }'
-    'Start-Process -FilePath (Join-Path $b ''sshd.exe'') -ArgumentList ''-f'', $c, ''-E'', $lg -WindowStyle Hidden'
-)
-Set-Content -LiteralPath $starter -Value $s -Encoding ascii
-Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $starter -WindowStyle Hidden
-Start-Sleep -Seconds 3
-P 'BANNER' (& {
-    $tc = New-Object Net.Sockets.TcpClient
-    try {
-        $tc.Connect('127.0.0.1', [int]$LocalPort)
-        $st = $tc.GetStream(); $buf = New-Object byte[] 120
-        $n = $st.Read($buf, 0, 120)
-        ([Text.Encoding]::ASCII.GetString($buf, 0, $n)).Trim()
-    } catch { 'CONNECT FAIL ' + $_.Exception.Message } finally { $tc.Close() }
-})
+# ---------- 5) script placement: D: root is PRIMARY, C: user folder keeps the BACKUP ----------
+# One-click reconnection: dialhome-connect.ps1 (double-click or logon autostart).
+$ScriptDir = if ($ScriptDirOverride) { $ScriptDirOverride }
+             elseif (Test-Path 'D:\') { 'D:\' }
+             else { $Root }
+$BackupDir = Join-Path $env:USERPROFILE 'dialhome'
+New-Item -ItemType Directory -Force -Path $ScriptDir, $BackupDir | Out-Null
+P 'SCRIPTS' $ScriptDir
+P 'BACKUP' $BackupDir
 
 # ---------- 6) the node key (enroll hands it over inline; otherwise pull it from the relay) ----------
 if (-not (Test-Path $idKey)) {
@@ -193,12 +180,14 @@ $channels = @(
     [pscustomobject]@{ Name = 'magpie'; Remote = $MagpiePort; Target = 3425 }
 ) | Where-Object { $_.Remote -gt 0 }
 
-$tun = Join-Path $Root 'start-tunnel.ps1'
+$tun = Join-Path $ScriptDir 'dialhome-tunnel.ps1'
 $t = @(
     '$ErrorActionPreference = ''Continue'''
-    '$ring = ' + "'" + ($idKey -replace '\\', '\\') + "'"
-    '$kh = ' + "'" + ($knownHosts -replace '\\', '\\') + "'"
-    '$root = ' + "'" + ($Root -replace '\\', '\\') + "'"
+    '$m = New-Object System.Threading.Mutex($false, ''Local\dialhome-tunnel'')'
+    'if (-not $m.WaitOne(0)) { exit 0 }   # single instance: the connect script races are harmless'
+    '$ring = ' + "'" + ($idKey) + "'"
+    '$kh = ' + "'" + ($knownHosts) + "'"
+    '$root = ' + "'" + ($Root) + "'"
     '$relay = ' + "'" + ($RelayUser + '@' + $RelayHost) + "'"
     '$relayPort = ' + $RelayPort
     '$ssh = "$env:SystemRoot\System32\OpenSSH\ssh.exe"'
@@ -236,7 +225,70 @@ $t = @(
     '}'
 )
 Set-Content -LiteralPath $tun -Value $t -Encoding ascii
-Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $tun -WindowStyle Hidden
+
+# sshd spawner (one-shot, no-op when the port is already listening)
+$sshdScript = Join-Path $ScriptDir 'dialhome-sshd.ps1'
+$s = @(
+    '$ErrorActionPreference = ''Continue'''
+    '$b = ' + "'" + ($Bin) + "'"
+    '$c = ' + "'" + ($cfg) + "'"
+    '$lg = ' + "'" + ((Join-Path $Root 'sshd.log') -replace '\\', '\\') + "'"
+    '$l = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, ' + $LocalPort + ')'
+    'try { $l.Start(); $l.Stop() } catch { exit 0 }'
+    'Start-Process -FilePath (Join-Path $b ''sshd.exe'') -ArgumentList ''-f'', $c, ''-E'', $lg -WindowStyle Hidden'
+)
+Set-Content -LiteralPath $sshdScript -Value $s -Encoding ascii
+
+# one-click reconnection: double-click or logon autostart -- brings sshd AND the tunnel
+# supervisors up, then prints status. Lives in BOTH script locations; the logon entry
+# points at the C: backup copy, which prefers the D: copies whenever D: is present.
+$conScript = Join-Path $ScriptDir 'dialhome-connect.ps1'
+$con = @'
+$ErrorActionPreference = 'Continue'
+$cands = @('D:\zc\sshd', (Join-Path $env:USERPROFILE 'sshserver'))
+$Root = $cands | Where-Object { Test-Path (Join-Path $_ 'sshd_config') } | Select-Object -First 1
+if (-not $Root) { $Root = $cands | Where-Object { Test-Path $_ } | Select-Object -First 1 }
+$bin = Join-Path $Root 'OpenSSH-Win64'
+$cfg = Join-Path $Root 'sshd_config'
+$lg = Join-Path $Root 'sshd.log'
+$port = 19022
+if (Test-Path $cfg) {
+  $pl = Get-Content $cfg | Where-Object { $_ -match '^Port ' } | Select-Object -First 1
+  if ($pl) { $port = [int]($pl -replace 'Port ', '') }
+}
+function Tcp([int]$p) { $t = New-Object Net.Sockets.TcpClient; $ok = $false; try { $t.Connect('127.0.0.1', $p); $ok = $t.Connected } catch { } finally { $t.Close() }; $ok }
+if (-not (Tcp $port)) {
+  if (Test-Path (Join-Path $bin 'sshd.exe')) {
+    Start-Process -FilePath (Join-Path $bin 'sshd.exe') -ArgumentList '-f', $cfg, '-E', $lg -WindowStyle Hidden
+    Start-Sleep -Seconds 2
+  }
+}
+$dirs = @('D:\')
+if ($PSScriptRoot) { $dirs += $PSScriptRoot }
+$dirs += (Join-Path $env:USERPROFILE 'dialhome'), $Root
+$tun = $dirs | ForEach-Object { Join-Path $_ 'dialhome-tunnel.ps1' } | Where-Object { Test-Path $_ } | Select-Object -First 1
+$sup = Get-CimInstance Win32_Process -EA 0 | Where-Object { $_.CommandLine -like '*dialhome-tunnel.ps1*' }
+if (-not $sup -and $tun) {
+  Start-Process powershell.exe -WindowStyle Hidden -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $tun + '"')
+}
+Start-Sleep -Seconds 3
+'TUNNEL-SCRIPT = ' + $tun
+'SSHD-UP = ' + (Tcp $port)
+'TUNNEL-SUP = ' + [bool](Get-CimInstance Win32_Process -EA 0 | Where-Object { $_.CommandLine -like '*dialhome-tunnel.ps1*' })
+'DATA-ROOT = ' + $Root
+'RUN-AGAIN = powershell -NoProfile -ExecutionPolicy Bypass -File "' + $tun + '"'
+'CONNECT-DONE'
+'@
+Set-Content -LiteralPath $conScript -Value $con -Encoding ascii
+
+# backup copies (C: user folder): identical names
+foreach ($pair in @(@($tun, 'dialhome-tunnel.ps1'), @($sshdScript, 'dialhome-sshd.ps1'), @($conScript, 'dialhome-connect.ps1'))) {
+    Copy-Item -LiteralPath $pair[0] -Destination (Join-Path $BackupDir $pair[1]) -Force
+}
+P 'SCRIPT-FILES' (((Get-ChildItem $ScriptDir -Filter 'dialhome-*.ps1' | ForEach-Object { $_.Name }) -join ', ') + ' + backup in ' + $BackupDir)
+
+# bring everything up right now (detached), through the one-click script
+Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', $conScript -WindowStyle Hidden -Wait
 Start-Sleep -Seconds 6
 foreach ($c in $channels) {
     $errFile = Join-Path $Root ('tunnel-' + $c.Name + '.err')
@@ -263,17 +315,29 @@ try {
     P 'REGISTER' ('sent (uuid/macs/user for ' + $env:COMPUTERNAME + ')')
 } catch { P 'REGISTER' ('FAILED ' + $_.Exception.Message) }
 
-# ---------- 8) autostart at logon (Startup folder; no admin needed) ----------
+# ---------- 8) user-level autostart: ONE entry -> C: backup copy of dialhome-connect.ps1 ----------
+# The C: copy is the stable anchor (survives D: removal); it prefers the D: copies at runtime.
 $sm = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
 $ws = New-Object -ComObject WScript.Shell
-foreach ($pair in @(@(('sshd-' + $me + '.lnk'), $starter), @(('sshtunnel-' + $me + '.lnk'), $tun))) {
-    $lnk = Join-Path $sm $pair[0]
-    $sc = $ws.CreateShortcut($lnk)
-    $sc.TargetPath = (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
-    $sc.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $pair[1] + '"'
-    $sc.WorkingDirectory = $Root
-    $sc.Save()
-    P ('STARTUP-LNK ' + $pair[0]) ((Test-Path $lnk) -and ((Get-Item -LiteralPath $lnk).Length -gt 600))
+$connectBackup = Join-Path $BackupDir 'dialhome-connect.ps1'
+$lnkName = 'dialhome-connect.lnk'
+$lnk = Join-Path $sm $lnkName
+$sc = $ws.CreateShortcut($lnk)
+$sc.TargetPath = (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
+$sc.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $connectBackup + '"'
+$sc.WorkingDirectory = $BackupDir
+$sc.Save()
+P ('STARTUP-LNK ' + $lnkName) ((Test-Path $lnk) -and ((Get-Item -LiteralPath $lnk).Length -gt 600))
+try {
+    New-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'dialhome-connect' `
+        -Value ('powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $connectBackup + '"') `
+        -PropertyType String -Force -ErrorAction Stop | Out-Null
+    P 'HKCU-RUN dialhome-connect' $true
+} catch { P 'HKCU-RUN dialhome-connect' ('FAILED ' + $_.Exception.Message) }
+# remove the old two-shortcut layout if a previous install left it
+foreach ($old in @(('sshd-' + $me + '.lnk'), ('sshtunnel-' + $me + '.lnk'))) {
+    $oldLnk = Join-Path $sm $old
+    if (Test-Path -LiteralPath $oldLnk) { Remove-Item -LiteralPath $oldLnk -Force; P ('removed legacy ' + $old) }
 }
 
 Write-Output ''
