@@ -41,11 +41,13 @@ used_port() {   # in authorized_keys (permitlisten) or already listening
 }
 
 # ---------- reuse an existing enrollment for this name ----------
+# the marker sits at END of line, so match it without a trailing space (PITFALLS B7)
 SSH_PORT=""; MAG_PORT=""
-if grep -q "magpie-node-$NAME " "$AK" 2>/dev/null; then
-    line="$(grep "magpie-node-$NAME " "$AK" | head -1)"
-    SSH_PORT="$(printf '%s' "$line" | grep -o 'permitlisten="127\.0\.0\.1:[0-9]*"' | head -1 | grep -o '[0-9]*')"
-    MAG_PORT="$(printf '%s' "$line" | grep -o 'permitlisten="127\.0\.0\.1:[0-9]*"' | sed -n 2p | grep -o '[0-9]*')"
+if grep -q "magpie-node-$NAME\$" "$AK" 2>/dev/null; then
+    line="$(grep "magpie-node-$NAME\$" "$AK" | head -1)"
+    # take the digits AFTER the last colon; exclude the closing quote from the match
+    SSH_PORT="$(printf '%s' "$line" | grep -o 'permitlisten="127\.0\.0\.1:[0-9]*' | head -1 | awk -F: '{print $NF}')"
+    MAG_PORT="$(printf '%s' "$line" | grep -o 'permitlisten="127\.0\.0\.1:[0-9]*' | sed -n 2p | awk -F: '{print $NF}')"
     say "reusing existing node '$NAME': ssh=$SSH_PORT magpie=$MAG_PORT"
 fi
 
@@ -72,7 +74,7 @@ fi
 PUB="$(cat "$KEY.pub")"
 
 # ---------- authorized_keys: one restricted line, two allowed listen ports ----------
-if ! grep -q "magpie-node-$NAME " "$AK" 2>/dev/null; then
+if ! grep -q "magpie-node-$NAME\$" "$AK" 2>/dev/null; then
     cp -a "$AK" "$AK.bak-enroll-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
     {
         printf 'restrict,command="%s %s",port-forwarding' "$CHECKER" "$SSH_PORT"

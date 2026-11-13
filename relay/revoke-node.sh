@@ -9,6 +9,7 @@ node="${1:?node name}"
 port="${2:-}"
 AK="$HOME/.ssh/authorized_keys"
 BASE="$HOME/.magpie-connector"
+MF2="$BASE/machines.json"
 stamp="$(date +%Y%m%d-%H%M%S)"
 
 echo "=== authorized_keys ==="
@@ -40,6 +41,21 @@ if [ -d "$BASE/nodes/$node" ]; then
 else
     echo "  $BASE/nodes/$node absent"
 fi
+
+echo "=== machines.json entry ==="
+python3 - "$node" "$MF2" <<'PY'
+import json, os, sys
+name, f = sys.argv[1], sys.argv[2]
+if not os.path.exists(f):
+    print('  no machines.json'); raise SystemExit
+m = json.load(open(f, encoding='utf-8'))
+if name in m:
+    del m[name]
+    json.dump(m, open(f, 'w', encoding='utf-8'), indent=1)
+    print('  removed', name)
+else:
+    print('  absent:', name)
+PY
 
 echo "=== listeners ==="
 if [ -n "$port" ]; then ss -ltn | grep ":${port} " || echo "  none on $port"

@@ -243,6 +243,26 @@ foreach ($c in $channels) {
     P ('CHAN-' + $c.Name + '-ERR') (((Get-Content -LiteralPath $errFile -Tail 2 -ErrorAction SilentlyContinue) -join ' // ') -replace '\s+', ' ')
 }
 
+# ---------- 7b) report hardware identity through THIS node's own restricted channel ----------
+# The node key's forced command accepts `register {json}` and may only write uuid/macs/user
+# into its own record (found by the port baked into its authorized_keys line). The relay's
+# reconcile-machines.sh then compares these facts through the encrypted channel, so identity
+# is anchored to hardware (UUID/MACs) rather than to DHCP addresses or randomized MACs.
+try {
+    function JEsc([string]$s) { return ($s -replace '\\', '\\\\' -replace '"', '\"') }
+    $u = (Get-CimInstance Win32_ComputerSystemProduct -EA 0).UUID
+    if (-not $u -or $u -match '^(none|0{8}(-0{4}){3}-0{12}|0+)$') { $u = '' }
+    $ms = ((Get-NetAdapter -EA 0 | Where-Object { $_.MacAddress } | ForEach-Object { $_.MacAddress }) | Sort-Object) -join ','
+    $payload = '{"uuid":"' + (JEsc $u) + '","macs":"' + (JEsc $ms) + '","user":"' + (JEsc $me) + '"}'
+    $regErr = Join-Path $Root 'register.err'
+    Start-Process -FilePath 'ssh.exe' -WindowStyle Hidden -Wait -ArgumentList @(
+        '-p', "$RelayPort", '-i', ('"{0}"' -f $idKey), '-o', 'BatchMode=yes',
+        '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=10',
+        ('{0}@{1}' -f $RelayUser, $RelayHost), ('register ' + $payload)
+    ) -RedirectStandardError $regErr | Out-Null
+    P 'REGISTER' ('sent (uuid/macs/user for ' + $env:COMPUTERNAME + ')')
+} catch { P 'REGISTER' ('FAILED ' + $_.Exception.Message) }
+
 # ---------- 8) autostart at logon (Startup folder; no admin needed) ----------
 $sm = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
 $ws = New-Object -ComObject WScript.Shell

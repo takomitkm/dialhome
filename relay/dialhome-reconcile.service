@@ -1,0 +1,10 @@
+[Unit]
+Description=dialhome machine reconcile (compare hardware identity through each node's channel)
+After=network.target
+
+[Service]
+Type=oneshot
+User=user
+Group=user
+ExecStart=/usr/bin/bash /home/user/.magpie-connector/reconcile-machines.sh
+NoNewPrivileges=yes

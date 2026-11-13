@@ -17,28 +17,66 @@ Run (systemd, as user): see dialhome-bootstrap.service in this directory.
 """
 import hmac
 import http.server
+import json
 import os
 import socketserver
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 
 BASE = os.path.expanduser("~/.magpie-connector")
 TOKEN_FILE = os.path.join(BASE, "bootstrap-token")
 LOG_FILE = os.path.join(BASE, "bootstrap.log")
+MACHINES_FILE = os.path.join(BASE, "machines.json")
 NAMES_FILE = os.path.join(BASE, "bootstrap-names.json")
 ENROLL = os.path.join(BASE, "enroll.sh")
 RATE_MAX = 6          # requests per IP per minute
 RATE_WINDOW = 60.0
+FLOCK = threading.Lock()
 
 window = {}           # ip -> [timestamps]
 
 
+def machines_read():
+    if os.path.exists(MACHINES_FILE):
+        with open(MACHINES_FILE, encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except ValueError:
+                return {}
+    return {}
+
+
+def machines_write(m):
+    tmp = MACHINES_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(m, f, indent=1)
+    os.replace(tmp, MACHINES_FILE)
+
+
+def name_for_fingerprint(fp, ip):
+    """Hardware-fingerprint identity: same fp -> same slot, regardless of IP/DHCP.
+    Two machines behind one NAT IP stay separate because fp comes from their
+    hardware (Win32_ComputerSystemProduct.UUID, MACs), not from the network."""
+    with FLOCK:
+        m = machines_read()
+        for name, rec in m.items():
+            if rec.get("fp") == fp:
+                rec["last_seen"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                rec["last_ip"] = ip
+                machines_write(m)
+                return name, True
+        name = "n-" + fp[:12]
+        m[name] = {"fp": fp, "first_ip": ip, "first_seen": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                   "last_seen": time.strftime("%Y-%m-%dT%H:%M:%S"), "uuid": None, "macs": None}
+        machines_write(m)
+        return name, False
+
+
 def name_for_ip(ip):
-    """Stable node name per client IP: first request allocates, later ones reuse.
-    Two machines that share one IP (heavy NAT) would share a slot -- pass ?n=<name>
-    from the client to override in that case."""
+    """Legacy fallback: identity keyed by source IP (used when the client sent no fp)."""
     import json
     names = {}
     if os.path.exists(NAMES_FILE):
@@ -106,13 +144,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log(f"DENY ip={ip} bad-token")
             return self._text(403, "bad token\n")
 
-        if q.get("n"):
+        if q.get("f"):
+            # hardware fingerprint (client-side SHA256 of UUID/MACs, 16 hex): identity
+            # follows the MACHINE, not the network -- DHCP re-addressing and random
+            # MACs on other adapters do not create a new slot. The fingerprint can be
+            # spoofed by whoever holds the token, so reconcile-machines.sh re-checks
+            # it through the encrypted channel once the node is reachable.
+            fp = (q.get("f") or [""])[0]
+            if not fp.isalnum() or len(fp) > 32:
+                return self._text(400, "bad fingerprint\n")
+            name, reused = name_for_fingerprint(fp.lower(), ip)
+            log(f"{'REUSE' if reused else 'NEW'} fp={fp} name={name} ip={ip}")
+        elif q.get("n"):
             raw = (q.get("n") or ["node"])[0]
             name = "".join(c for c in raw.lower() if c.isalnum() or c == "-")[:40] or "node"
+            log(f"EXPLICIT name={name} ip={ip}")
         else:
-            # no name given: allocate/reuse a stable per-IP identity, so the client
-            # one-liner stays as short as `iex(curl.exe -s '<url>?t=<token>')`
+            # legacy fallback: no fingerprint sent -- key the identity on source IP
             name = name_for_ip(ip)
+            log(f"IPNAME name={name} ip={ip}")
 
         try:
             r = subprocess.run(["bash", ENROLL, name], capture_output=True,

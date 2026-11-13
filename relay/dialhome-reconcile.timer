@@ -1,0 +1,10 @@
+[Unit]
+Description=run dialhome machine reconcile every 30 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

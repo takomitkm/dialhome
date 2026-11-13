@@ -1,21 +1,54 @@
 #!/usr/bin/env bash
 # magpie-tunnel-check <port>
 # Forced command for a restricted connector key:
-#   restrict,command="/home/user/.local/bin/magpie-tunnel-check 13425",port-forwarding,permitlisten="127.0.0.1:13425"
+#   restrict,command=".../magpie-tunnel-check <port>",port-forwarding,permitlisten="127.0.0.1:<port>"
 # Runs only when the client opens a session (no -N); prints ONE line of JSON.
 # It reports (a) whether the reverse tunnel listener exists and is loopback-bound,
 # (b) whether this host can actually speak magpie through it.
 #
-# Onboarding helper: a whitelisted file can be fetched as base64 by asking for
-#   GET:win-sshd   -> win-sshd.ps1
-#   GET:migrate    -> migrate-to-D.ps1
-# (sshd exports $SSH_ORIGINAL_COMMAND for forced commands; a normal probe has none.)
+# `register` (SSH_ORIGINAL_COMMAND): the node reports its hardware identity
+#   (Win32_ComputerSystemProduct.UUID, MAC addresses, Windows account) right after
+#   install, so the relay can tell machines apart by hardware instead of IP/DHCP.
+#   The node can only write uuid/macs/user into ITS OWN record (found by the port
+#   baked into its authorized_keys line) -- nothing else.
 set -u
 
-case "${SSH_ORIGINAL_COMMAND:-}" in
+orig="${SSH_ORIGINAL_COMMAND:-}"
+
+case "$orig" in
   GET:win-sshd) base64 -w0 "$HOME/.magpie-connector/win-sshd.ps1"; echo; exit 0 ;;
   GET:migrate)  base64 -w0 "$HOME/.magpie-connector/migrate-to-D.ps1"; echo; exit 0 ;;
 esac
+
+if printf '%s' "$orig" | grep -q '^register '; then
+  port="${1:-}"
+  payload="$(printf '%s' "$orig" | sed 's/^register //')"
+  # PowerShell->ssh may hand us backslash-escaped quotes; undo them
+  payload="${payload//\\\"/\"}"
+  printf '%s' "$payload" | grep -qE '^\{.*\}$' || { printf '{"ok":false,"reason":"bad-payload"}\n'; exit 0; }
+  [ ${#payload} -le 2000 ] || { printf '{"ok":false,"reason":"payload-too-large"}\n'; exit 0; }
+  # which node is calling? the port is baked into its own authorized_keys line
+  name="$(grep "check ${port}" "$HOME/.ssh/authorized_keys" 2>/dev/null | grep -oE '(magpie-node-[a-z0-9-]+|magpie-tunnel-node-[0-9]+)' | head -1)"
+  [ -n "$name" ] || { printf '{"ok":false,"reason":"unknown-caller"}\n'; exit 0; }
+  # machines.json is keyed by the BARE node name (same space as bootstrap fp lookup)
+  name="${name#magpie-node-}"; name="${name#magpie-tunnel-node-}"
+  MF="$HOME/.magpie-connector/machines.json"
+  MK="$HOME/.magpie-connector/machines.json.lock"
+  flock "$MK" python3 - "$name" "$payload" <<'PY'
+import json, sys, os, time
+name, payload = sys.argv[1], json.loads(sys.argv[2])
+f = os.path.expanduser('~/.magpie-connector/machines.json')
+m = json.load(open(f, encoding='utf-8')) if os.path.exists(f) else {}
+r = m.setdefault(name, {})
+for k in ('uuid', 'macs', 'user'):
+    if k in payload:
+        r[k] = str(payload[k])[:200]
+r['reported_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
+json.dump(m, open(f, 'w', encoding='utf-8'), indent=1)
+print('{"ok":true}')
+PY
+  exit 0
+fi
 
 port="${1:-}"
 if ! printf '%s' "$port" | grep -qE '^[0-9]{2,5}$'; then

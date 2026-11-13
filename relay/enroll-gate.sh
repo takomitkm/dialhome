@@ -23,8 +23,35 @@ log "gate hit: orig='${orig:0:80}' from=${SSH_CLIENT%% *}"
 
 case "$orig" in
     enroll\ [a-zA-Z0-9-]*)
-        name="$(printf '%s' "$orig" | sed 's/^enroll //' | tr -cd 'a-z0-9-')"
+        args="$(printf '%s' "$orig" | sed 's/^enroll //')"
+        name="$(printf '%s' "$args" | cut -d' ' -f1 | tr -cd 'a-z0-9-')"
+        fp="$(printf '%s' "$args" | cut -d' ' -s -f2 | tr -cd 'a-f0-9' | cut -c1-32)"
         [ -n "$name" ] || { echo 'DENY: empty name'; exit 1; }
+        # The hardware fingerprint decides the slot, not the requested name: the same
+        # machine re-appearing from a new IP / with a new hostname re-uses its existing
+        # identity, so DHCP changes and randomized MACs never fork a machine.
+        # stdout stays reserved for the installer; human messages go to stderr.
+        if [ -n "$fp" ]; then
+            MF="$BASE/machines.json"
+            MK="$BASE/machines.json.lock"
+            mkdir -p "$BASE"
+            name="$(flock "$MK" python3 - "$name" "$fp" "$MF" <<'PY'
+import json, sys, os, time
+requested, fp, f = sys.argv[1], sys.argv[2], sys.argv[3]
+m = json.load(open(f, encoding='utf-8')) if os.path.exists(f) else {}
+name = next((n for n, r in m.items() if r.get('fp') == fp), None)
+if name:
+    print('FP-REUSE ' + name, file=sys.stderr)
+else:
+    m[requested] = {'fp': fp, 'enrolled_at': time.strftime('%Y-%m-%dT%H:%M:%S')}
+    json.dump(m, open(f, 'w', encoding='utf-8'), indent=1)
+    name = requested
+    print('FP-NEW ' + name, file=sys.stderr)
+print(name)
+PY
+)"
+            name="$(printf '%s' "$name" | tail -1)"
+        fi
         exec bash "$BASE/enroll.sh" "$name"
         ;;
     get\ sshserver)

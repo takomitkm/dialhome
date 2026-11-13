@@ -50,16 +50,19 @@ cat <<EOF
 \$ek = Join-Path \$env:TEMP 'dialhome-enroll.key'
 [IO.File]::WriteAllBytes(\$ek, [Convert]::FromBase64String(\$EkB64))
 & icacls.exe \$ek /inheritance:r /grant:r ("\$env:USERDOMAIN\\\$env:USERNAME:F") | Out-Null
-# stable per-machine fingerprint: same machine re-runs reuse their slot; two machines
-# that happen to share a COMPUTERNAME still get separate slots.
-\$rk = 'HKCU:\Software\dialhome'
-\$mid = (Get-ItemProperty \$rk -EA 0).mid
-if (-not \$mid) { \$mid = -join((1..6) | % { '{0:x2}' -f (Get-Random -Max 16) }); New-Item \$rk -Force | Out-Null; Set-ItemProperty \$rk -Name mid -Value \$mid }
+# hardware fingerprint: UUID first (stable across DHCP/reinstall/random-MAC), MAC set
+# second, random per-Windows-install id only when a board reports neither.
+\$u = (Get-CimInstance Win32_ComputerSystemProduct -EA 0).UUID
+if (-not \$u -or \$u -match '^(none|0{8}(-0{4}){3}-0{12}|0+)\$') { \$u = '' }
+\$ms = ((Get-NetAdapter -EA 0 | Where-Object { \$_.MacAddress } | ForEach-Object { \$_.MacAddress }) | Sort-Object) -join ','
+if (\$u) { \$f = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes('u|' + \$u))).Replace('-','').Substring(0,16).ToLower() }
+elseif (\$ms) { \$f = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes('m|' + \$ms))).Replace('-','').Substring(0,16).ToLower() }
+else { \$rk = 'HKCU:\Software\dialhome'; \$f = (Get-ItemProperty \$rk -EA 0).mid; if (-not \$f) { \$f = -join((1..8) | % { '{0:x2}' -f (Get-Random -Max 16) }); New-Item \$rk -Force | Out-Null; Set-ItemProperty \$rk -Name mid -Value \$f } }
 \$name = (\$env:COMPUTERNAME.ToLower() -replace '[^a-z0-9-]','')
 if (-not \$name) { \$name = 'node' }
-\$name = \$name + '-' + \$mid
+\$name = \$name + '-' + \$f
 \$inst = Join-Path \$env:TEMP 'dialhome-install.ps1'
-ssh -p $RELAY_PORT -i \$ek $RELAY_USER@$RELAY_HOST "enroll \$name" > \$inst
+ssh -p $RELAY_PORT -i \$ek $RELAY_USER@$RELAY_HOST "enroll \$name \$f" > \$inst
 if ((Get-Item \$inst).Length -lt 2000) { Get-Content \$inst; exit 1 }
 & powershell -NoProfile -ExecutionPolicy Bypass -File \$inst -EnrollKeyB64 \$EkB64
 EOF
