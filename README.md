@@ -54,7 +54,7 @@ ssh deb-h61 'bash -s' < relay/stage-relay.sh   # 校验并放置 OpenSSH zip / �
 
 ```powershell
 `powershell
-iex(curl.exe -s 'http://10.101.54.192:18443/i?t=<TOKEN>')
+iex((New-Object Net.WebClient).DownloadString('http://10.101.54.192:18443/i?t=<TOKEN>'))
 `
 
 需要先把路由器的 18443 映射到 relay（一次性，见 PORTS.md）。token 就是能力：一轮接入完就换。

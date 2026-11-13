@@ -49,7 +49,7 @@
 
 ```
 新机 PowerShell 一行:
-  iex(curl.exe -s 'http://10.101.54.192:18443/i?t=<token>')     
+  iex((New-Object Net.WebClient).DownloadString('http://10.101.54.192:18443/i?t=<token>'))
   # 名字可省略: 服务器按来源 IP 分配/复用身份; 要显式命名再加 &n=<名>
 或 USB 上的 client\onboard.cmd（双击即用，token 已内嵌）
 ```
