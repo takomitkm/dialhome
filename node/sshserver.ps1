@@ -229,7 +229,7 @@ $t = @(
     '      "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",'
     '      "-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=$kh", $relay)'
     '    if ($s.Proc.HasExited) {'
-    '      $s.Wait = if ($s.Fails -ge 5) { 3600 } else { [Math]::Min(60, $s.Wait * 2) }'
+    '      $s.Wait = if ($s.Fails -ge 10) { 3600 } elseif ($s.Fails -ge 5) { 60 } else { [Math]::Min(60, $s.Wait * 2) }'
     '      Add-Content -LiteralPath $err -Value ("retry in " + $s.Wait + "s")'
     '    } else {'
     '      $s.Wait = 5; $s.Fails = 0'
