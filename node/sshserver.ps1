@@ -190,6 +190,16 @@ $t = @(
     '$ErrorActionPreference = ''Continue'''
     '$m = New-Object System.Threading.Mutex($false, ''Local\dialhome-tunnel'')'
     'if (-not $m.WaitOne(0)) { exit 0 }   # single instance: the connect script races are harmless'
+    '# boot-time wait: right after a reboot the network may not be up yet; probing now would'
+    '# burn the whole 5-fail ladder and park the supervisor in the 1h sleep. Wait (max 10 min)'
+    '# for the relay port to answer before entering the retry ladder. Does not affect runtime.'
+    'foreach ($i in 1..20) {'
+    '  $c = New-Object Net.Sockets.TcpClient'
+    '  $ok = $false'
+    '  try { $c.Connect(''' + $RelayHost + ''', ' + $RelayPort + '); $ok = $c.Connected } catch { } finally { $c.Close() }'
+    '  if ($ok) { break }'
+    '  Start-Sleep -Seconds 30'
+    '}'
     '$ring = ' + "'" + ($idKey) + "'"
     '$kh = ' + "'" + ($knownHosts) + "'"
     '$root = ' + "'" + ($Root) + "'"
