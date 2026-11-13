@@ -2,20 +2,20 @@
 # -*- coding: utf-8 -*-
 """bootstrap-server.py -- the ONE public port that onboards any new machine.
 
-    GET /healthz                 -> "ok" (no token)
-    GET /i?n=<name>&t=<token>    -> the personalized installer for that machine
+    GET /healthz                 -> "ok"
+    GET /i[?f=<fp>][?n=<name>]   -> the personalized installer for that machine
 
-Security model:
-  * the token IS the capability: without it the port answers nothing useful
-  * the token travels over plain HTTP, so rotate it (delete bootstrap-token and
-    restart) after onboarding sessions, and treat campus HTTP as sniffable
-  * every request is logged to bootstrap.log (ip, name, bytes)
-  * rate limited per IP; enroll output is generated per request by enroll.sh, so
-    each connection mints exactly one node identity (key + a fresh port pair)
+Security model (owner's call: OPEN enrollment -- no token):
+  * anyone who can reach the port can mint a node identity; that is intentional
+  * the hard ceiling is the port pool itself (enroll.sh refuses when the pairs
+    run out), plus a per-IP rate limit and full request logging
+  * node keys stay unprivileged (own loopback ports only, no -L, no shell), so a
+    rogue enrollment costs resources, not access
+  * reconcile-machines.sh audits what got enrolled and auto-merges duplicate
+    hardware identities
 
 Run (systemd, as user): see dialhome-bootstrap.service in this directory.
 """
-import hmac
 import http.server
 import json
 import os
@@ -27,7 +27,6 @@ import time
 import urllib.parse
 
 BASE = os.path.expanduser("~/.magpie-connector")
-TOKEN_FILE = os.path.join(BASE, "bootstrap-token")
 LOG_FILE = os.path.join(BASE, "bootstrap.log")
 MACHINES_FILE = os.path.join(BASE, "machines.json")
 NAMES_FILE = os.path.join(BASE, "bootstrap-names.json")
@@ -94,11 +93,6 @@ def name_for_ip(ip):
     return names[ip]
 
 
-def read_token():
-    with open(TOKEN_FILE, encoding="utf-8") as f:
-        return f.read().strip()
-
-
 def log(msg):
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -147,19 +141,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if u.path == "/healthz":
             return self._text(200, "ok\n")
         if u.path != "/i":
-            return self._pserr(404, "unknown path (use /i?t=<token>)")
+            return self._pserr(404, "unknown path (use /i)")
 
         q = urllib.parse.parse_qs(u.query)
-        given = (q.get("t") or [""])[0]
-        if not given or not hmac.compare_digest(given, read_token()):
-            log(f"DENY ip={ip} bad-token")
-            return self._pserr(403, "bad token - copy the real one from dialhome-onboard.cmd (TOKEN= line)")
-
         if q.get("f"):
             # hardware fingerprint (client-side SHA256 of UUID/MACs, 16 hex): identity
             # follows the MACHINE, not the network -- DHCP re-addressing and random
-            # MACs on other adapters do not create a new slot. The fingerprint can be
-            # spoofed by whoever holds the token, so reconcile-machines.sh re-checks
+            # MACs on other adapters do not create a new slot. The fingerprint is client-claimed, so reconcile-machines.sh re-checks
             # it through the encrypted channel once the node is reachable.
             fp = (q.get("f") or [""])[0]
             if not fp.isalnum() or len(fp) > 32:
@@ -199,14 +187,8 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 18443
     bind = sys.argv[2] if len(sys.argv) > 2 else "0.0.0.0"
-    if not os.path.exists(TOKEN_FILE):
-        import secrets
-        with open(TOKEN_FILE, "w", encoding="utf-8") as f:
-            f.write(secrets.token_hex(16))
-        os.chmod(TOKEN_FILE, 0o600)
-        log("token generated")
     log(f"listening on {bind}:{port}")
-    print(f"dialhome bootstrap on {bind}:{port} (token: {TOKEN_FILE})")
+    print(f"dialhome bootstrap on {bind}:{port} (open enrollment -- no token)")
     Server((bind, port), Handler).serve_forever()
 
 

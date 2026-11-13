@@ -86,6 +86,33 @@ PY
     fi
 done
 
+# ---------- auto-merge: same hardware UUID enrolled twice -> keep the oldest slot ----------
+# A machine that re-onboarded from a new IP (DHCP change) leaves a duplicate slot;
+# identical non-empty UUIDs prove it is the same physical machine, so fold them.
+merge="$(python3 - "$MF" <<'PY'
+import json, os, sys
+f = sys.argv[1]
+m = json.load(open(f, encoding='utf-8')) if os.path.exists(f) else {}
+groups = {}
+for name, rec in m.items():
+    u = (rec.get('uuid') or '').strip()
+    if u:
+        groups.setdefault(u, []).append(name)
+for u, names in groups.items():
+    if len(names) < 2:
+        continue
+    names.sort(key=lambda n: m[n].get('enrolled_at') or m[n].get('first_seen') or m[n].get('reported_at') or '9999')
+    for drop in names[1:]:
+        print('DROP ' + drop)
+PY
+)"
+printf '%s\n' "$merge" | while read -r cmd; do
+    [ -n "$cmd" ] || continue
+    drop="${cmd#DROP }"
+    log "AUTO-MERGE: $drop folds into its older twin (same hardware UUID)"
+    bash "$BASE/revoke-node.sh" "$drop" >/dev/null 2>&1
+done
+
 log "reconcile pass finished"
 echo "report: $REPORT (tail below)"
 tail -12 "$REPORT"
