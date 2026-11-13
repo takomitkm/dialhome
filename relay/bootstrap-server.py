@@ -27,11 +27,33 @@ import urllib.parse
 BASE = os.path.expanduser("~/.magpie-connector")
 TOKEN_FILE = os.path.join(BASE, "bootstrap-token")
 LOG_FILE = os.path.join(BASE, "bootstrap.log")
+NAMES_FILE = os.path.join(BASE, "bootstrap-names.json")
 ENROLL = os.path.join(BASE, "enroll.sh")
 RATE_MAX = 6          # requests per IP per minute
 RATE_WINDOW = 60.0
 
 window = {}           # ip -> [timestamps]
+
+
+def name_for_ip(ip):
+    """Stable node name per client IP: first request allocates, later ones reuse.
+    Two machines that share one IP (heavy NAT) would share a slot -- pass ?n=<name>
+    from the client to override in that case."""
+    import json
+    names = {}
+    if os.path.exists(NAMES_FILE):
+        with open(NAMES_FILE, encoding="utf-8") as f:
+            try:
+                names = json.load(f)
+            except ValueError:
+                names = {}
+    if ip not in names:
+        import secrets
+        suffix = secrets.token_hex(2)
+        names[ip] = f"n-{ip.replace('.', '-')}-{suffix}"
+        with open(NAMES_FILE, "w", encoding="utf-8") as f:
+            json.dump(names, f, indent=1)
+    return names[ip]
 
 
 def read_token():
@@ -84,8 +106,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log(f"DENY ip={ip} bad-token")
             return self._text(403, "bad token\n")
 
-        raw = (q.get("n") or ["node"])[0]
-        name = "".join(c for c in raw.lower() if c.isalnum() or c == "-")[:40] or "node"
+        if q.get("n"):
+            raw = (q.get("n") or ["node"])[0]
+            name = "".join(c for c in raw.lower() if c.isalnum() or c == "-")[:40] or "node"
+        else:
+            # no name given: allocate/reuse a stable per-IP identity, so the client
+            # one-liner stays as short as `iex(curl.exe -s '<url>?t=<token>')`
+            name = name_for_ip(ip)
 
         try:
             r = subprocess.run(["bash", ENROLL, name], capture_output=True,
