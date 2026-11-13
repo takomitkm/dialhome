@@ -54,8 +54,8 @@ ssh deb-h61 'bash -s' < relay/stage-relay.sh   # 校验并放置 OpenSSH zip / �
 
 ```powershell
 `powershell
-iex((New-Object Net.WebClient).DownloadString('http://10.101.54.192:18443/i?t=<TOKEN>'))
-`
+USB 里的 `client/onboard.cmd`（SSH 版，内嵌登记私钥，双击即装）。
+没有公网开户口：接入只走 18322，硬件指纹决定槽位。
 
 需要先把路由器的 18443 映射到 relay（一次性，见 PORTS.md）。token 就是能力：一轮接入完就换。
 不想用公开口的话，用 USB 上的 client/onboard.cmd 或 Desktop\dialhome-magic.ps1（走 SSH 通道，不经过 18443）。

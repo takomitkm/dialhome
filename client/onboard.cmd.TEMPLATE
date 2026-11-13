@@ -1,15 +1,14 @@
 @echo off
-rem dialhome onboard -- copy this file to a USB stick; double-click on any new
-rem Windows machine to enroll it and bring up the channels. One-time router rule
-rem (external 18443 -> relay 18443) must exist. TOKEN is a capability: treat this
-rem file like a key; rotate by deleting ~/.magpie-connector/bootstrap-token on the
-rem relay and restarting dialhome-bootstrap.
+rem dialhome onboard -- SSH edition (no public bootstrap port, no token).
+rem Copy to a USB stick; double-click on any new Windows machine.
+rem This file carries the ENROLL PRIVATE KEY: treat it like a key.
+rem Revoke everything it could ever grant: delete the 'dialhome-enroll-gate' line
+rem in the relay's authorized_keys (ssh deb-h61).
 rem Identity = hardware fingerprint (UUID first, then MAC set), NOT the IP/DHCP
-rem address -- so a machine keeps its slot across re-addressing, and two machines
-rem behind one IP stay separate.
-set "TOKEN=__TOKEN__"
-set "SRV=10.101.54.192:18443"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$u=(Get-CimInstance Win32_ComputerSystemProduct -EA 0).UUID;if(-not $u -or $u -match '^(none|0{8}(-0{4}){3}-0{12}|0+)$'){$u=''};$ms=((Get-NetAdapter -EA 0|?{$_.MacAddress}|%{$_.MacAddress})|Sort-Object) -join ',';if($u){$f=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes('u|'+$u))).Replace('-','').Substring(0,16).ToLower()}elseif($ms){$f=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes('m|'+$ms))).Replace('-','').Substring(0,16).ToLower()}else{$k='HKCU:\Software\dialhome';$f=(Get-ItemProperty $k -EA 0).mid;if(-not $f){$f=-join((1..8)|%{'{0:x2}' -f (Get-Random -Max 16)});New-Item $k -Force|Out-Null;Set-ItemProperty $k -Name mid -Value $f}};iex((New-Object Net.WebClient).DownloadString('http://%SRV%/i?t=%TOKEN%&f='+$f))"
+rem address -- a machine keeps its slot across re-addressing; two machines behind
+rem one IP stay separate.
+set "RELAY=10.101.54.192"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Continue';$EkB64='__KEYB64__';$ek=Join-Path $env:TEMP 'dialhome-enroll.key';[IO.File]::WriteAllBytes($ek,[Convert]::FromBase64String($EkB64));& icacls.exe $ek /inheritance:r /grant:r ('{0}\{1}:F' -f $env:COMPUTERNAME,$env:USERNAME) | Out-Null;$u=(Get-CimInstance Win32_ComputerSystemProduct -EA 0).UUID;if(-not $u -or $u -match '^(none|0{8}(-0{4}){3}-0{12}|0+)$'){$u=''};$ms=((Get-NetAdapter -EA 0|?{$_.MacAddress}|%{$_.MacAddress})|Sort-Object) -join ',';if($u){$f=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes('u|'+$u))).Replace('-','').Substring(0,16).ToLower()}elseif($ms){$f=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes('m|'+$ms))).Replace('-','').Substring(0,16).ToLower()}else{$k='HKCU:\Software\dialhome';$f=(Get-ItemProperty $k -EA 0).mid;if(-not $f){$f=-join((1..8)|%{'{0:x2}' -f (Get-Random -Max 16)});New-Item $k -Force|Out-Null;Set-ItemProperty $k -Name mid -Value $f}};$n=($env:COMPUTERNAME.ToLower() -replace '[^a-z0-9-]','');if(-not $n){$n='node'};$inst=Join-Path $env:TEMP 'dialhome-install.ps1';ssh -o StrictHostKeyChecking=accept-new -p 18322 -i $ek user@%RELAY% ('enroll '+$n+'-'+$f+' '+$f) 1> $inst;if((Get-Item $inst).Length -lt 2000){Get-Content $inst;exit 1};& powershell -NoProfile -ExecutionPolicy Bypass -File $inst -EnrollKeyB64 $EkB64;Remove-Item $ek -Force -EA 0"
 echo.
 echo done. check the relay:  ssh deb-h61 'ss -ltn | grep 134'
 pause

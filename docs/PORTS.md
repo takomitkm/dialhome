@@ -42,29 +42,17 @@
 
 真要说上限：`permitlisten` 端口段用完后换一段即可；relay 端 fd 才是实际天花板（数百级）。
 
-## bootstrap 端口（18443）：最后一个需要路由器映射的端口
+## bootstrap 端口（18443）——已退役（2026-11-13，方案 B）
 
-`relay/bootstrap-server.py`（systemd 单元 `dialhome-bootstrap.service`，已部署）是
-**面向校园网的"开机注册口"**：
+曾经有一个 token 门禁的 HTTP 开户口（`bootstrap-server.py`），后来评估后关闭：
+节点 key 虽然无权，但"无 token = 全校可脚本化批量开户"，端口池/AK 文件/日志都会被
+无人看管的批量滥用磨掉。现在的接入**只走 18322（SSH）**：
 
-```
-新机 PowerShell 一行:
-  iex((New-Object Net.WebClient).DownloadString('http://10.101.54.192:18443/i?t=<token>'))
-  # 名字可省略: 服务器按来源 IP 分配/复用身份; 要显式命名再加 &n=<名>
-或 USB 上的 client\onboard.cmd（双击即用，token 已内嵌）
-```
+- USB 上的 `client/onboard.cmd`（内嵌登记私钥，双击）或桌面的 magic paste
+- 路由器映射只剩 **18322 一个**；`18443` 的映射规则可以删除
+- 硬件指纹 / register / reconcile 机制不受影响（都走 SSH 通道）
 
-| 要点 | 说明 |
-|---|---|
-| 需要的路由器规则 | **一次**：外部 `18443` → `192.168.1.102:18443`。此后加机器零路由器操作 |
-| token 就是能力 | `/i` 必须带 `?t=`；明文 HTTP 会嗅探 → **一轮接入完就换 token**（删 relay 的 `bootstrap-token` 重启服务） |
-| 限速 | 每 IP 每分钟 6 次；所有请求进 `bootstrap.log` |
-| 按请求发身份 | 每次成功请求 = enroll.sh 现场铸造一个节点（独立 key + 独立端口对）；登记私钥**不下发** |
-| 名字冲突 | 客户端带 6 位稳定指纹（`HKCU\Software\dialhome\mid`）：同名主机不同机器 → 不同槽位；同一台重跑 → 复用原槽位 |
-| 容量 | 池 `13440–13600` = 80 对；`PORT_TOP` 可扩；真正天花板是 relay fd（数百台） |
-
-⚠️ 该端口监听 `0.0.0.0`（家里 LAN 也能直连），没有 token 只会得到 403/bad token；
- `/healthz` 无需 token（只回 "ok"）。
+`relay/bootstrap-server.py` 与 systemd 单元保留在 git 历史里，需要时可直接复活。
 
 ## 为什么不把节点端口直接映射到路由器
 
