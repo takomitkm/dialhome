@@ -42,17 +42,23 @@
 
 真要说上限：`permitlisten` 端口段用完后换一段即可；relay 端 fd 才是实际天花板（数百级）。
 
-## bootstrap 端口（18443）——已退役（2026-11-13，方案 B）
+## bootstrap 端口（18443）：开放开户口（机主拍板：无 token，都能连）
 
-曾经有一个 token 门禁的 HTTP 开户口（`bootstrap-server.py`），后来评估后关闭：
-节点 key 虽然无权，但"无 token = 全校可脚本化批量开户"，端口池/AK 文件/日志都会被
-无人看管的批量滥用磨掉。现在的接入**只走 18322（SSH）**：
+```
+新机 PowerShell 一行:
+  iex((New-Object Net.WebClient).DownloadString('http://10.101.54.192:18443/i'))
+```
 
-- USB 上的 `client/onboard.cmd`（内嵌登记私钥，双击）或桌面的 magic paste
-- 路由器映射只剩 **18322 一个**；`18443` 的映射规则可以删除
-- 硬件指纹 / register / reconcile 机制不受影响（都走 SSH 通道）
+| 要点 | 说明 |
+|---|---|
+| 需要的路由器规则 | 一次：外部 `18443` → `192.168.1.102:18443` |
+| 身份 | 无 token、无客户端参数：按来源 IP 先记一个名字；节点装完自动 register 上报 UUID/MAC，30 分钟对账器**自动合并同 UUID 的重复槽位**（换 IP/重装不再越积越多） |
+| 限速 | 每 IP 每分钟 6 次；全量进 `bootstrap.log` |
+| 天花板 | 端口池 80 对用完即拒（enroll.sh 自己拒绝），AK 不会无限膨胀 |
+| 风险（机主已接受） | 全校任何人可批量开户占满池子；节点 key 无权（只绑自己回环端口、无 -L、无 shell），代价是资源不是权限；发现垃圾节点 → `revoke-node.sh <名>` 逐个清 |
+| 离线兜底 | USB 的 `client/onboard.cmd`（SSH 版，内嵌登记私钥）不依赖这个口 |
 
-`relay/bootstrap-server.py` 与 systemd 单元保留在 git 历史里，需要时可直接复活。
+`/healthz` 无需参数；错误响应是合法 PowerShell（注释 + 黄色提示），`iex` 不会再爆红字。
 
 ## 为什么不把节点端口直接映射到路由器
 
