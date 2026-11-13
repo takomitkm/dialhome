@@ -86,17 +86,20 @@ else
 fi
 
 # ---------- emit the installer (stdout only) ----------
-# sshserver.ps1 is embedded inline so the node needs exactly ONE password prompt (this enroll
-# call); fetching it separately would ask for the 102 password a second time.
+# Everything is embedded inline: the node key AND the enroll key, so the node never asks for
+# the 102 password and can still pull the OpenSSH zip through the enroll gate if GitHub is slow.
 SSHSERVER="$BASE/sshserver.ps1"
 [ -f "$SSHSERVER" ] || die "sshserver.ps1 missing on the relay: $SSHSERVER (copy it from the repo)"
 SSHSERVER_B64="$(base64 -w0 "$SSHSERVER")"
 KEY_B64="$(base64 -w0 "$KEY")"
+EK_B64=''
+[ -f "$HOME/.ssh/dialhome_enroll" ] && EK_B64="$(base64 -w0 "$HOME/.ssh/dialhome_enroll")"
 cat <<EOF
 \$ErrorActionPreference = 'Continue'
 \$KeyB64 = '$KEY_B64'
 \$Src = '$SSHSERVER_B64'
+\$EkB64 = '$EK_B64'
 \$tmp = Join-Path \$env:TEMP 'sshserver.ps1'
 [IO.File]::WriteAllBytes(\$tmp, [Convert]::FromBase64String(\$Src))
-& powershell -NoProfile -ExecutionPolicy Bypass -File \$tmp -KeyB64 \$KeyB64 -RemotePort $SSH_PORT -MagpiePort $MAG_PORT -RelayHost $RELAY_HOST -RelayPort $RELAY_PORT -RelayUser $RELAY_USER
+& powershell -NoProfile -ExecutionPolicy Bypass -File \$tmp -KeyB64 \$KeyB64 -EnrollKeyB64 \$EkB64 -RemotePort $SSH_PORT -MagpiePort $MAG_PORT -RelayHost $RELAY_HOST -RelayPort $RELAY_PORT -RelayUser $RELAY_USER
 EOF

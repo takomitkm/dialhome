@@ -21,6 +21,7 @@ param(
     [string]$IdentityFile = '',
     [string]$KeyB64 = '',
     [string]$KeyRel = '',
+    [string]$EnrollKeyB64 = '',
     [string]$LoginPubKey = '',
     [switch]$NoAutostart
 )
@@ -66,9 +67,25 @@ if (-not (Test-Path (Join-Path $Bin 'sshd.exe'))) {
             P 'DOWNLOAD' ('OK ' + (Get-Item -LiteralPath $Zip).Length + ' bytes')
         } catch {
             P 'DOWNLOAD' ('FAIL ' + $_.Exception.Message)
-            P 'FALLBACK' 'pulling the same zip from 102 over scp (asks the 102 password once)'
-            & scp.exe -P $RelayPort ('{0}@{1}:.magpie-connector/OpenSSH-Win64.zip' -f $RelayUser, $RelayHost) $Zip
-            if (Test-Path $Zip) { P 'SCP' ('OK ' + (Get-Item -LiteralPath $Zip).Length + ' bytes') } else { P 'SCP' 'FAIL' }
+            # passwordless fallback: pull the pinned zip through the enroll gate. The gate only
+            # serves three public files, so this key stays useless for anything else.
+            $ek = Join-Path $Root 'enroll_key'
+            if (-not (Test-Path -LiteralPath $ek)) {
+                if ($EnrollKeyB64) {
+                    [IO.File]::WriteAllBytes($ek, [Convert]::FromBase64String($EnrollKeyB64))
+                    & (Join-Path $env:SystemRoot 'System32\icacls.exe') $ek '/inheritance:r' '/grant:r' ($meFull + ':F') 2>$null | Out-Null
+                }
+            }
+            if (Test-Path -LiteralPath $ek) {
+                P 'FALLBACK' 'pulling the zip through the enroll gate (no password)'
+                # OS-level redirection via Start-Process: raw bytes, no cmd quoting, no PS re-encoding
+                $p = Start-Process -FilePath "$env:SystemRoot\System32\OpenSSH\ssh.exe" -PassThru -WindowStyle Hidden `
+                    -RedirectStandardOutput $Zip -RedirectStandardError ($Zip + '.err') -Wait -ArgumentList @(
+                    '-p', "$RelayPort", '-i', ('"{0}"' -f $ek), '-o', 'BatchMode=yes',
+                    '-o', 'StrictHostKeyChecking=accept-new', ('{0}@{1}' -f $RelayUser, $RelayHost), 'get', 'openssh')
+                if ((Test-Path -LiteralPath $Zip) -and ((Get-Item -LiteralPath $Zip).Length -gt 1MB)) { P 'GATE-PULL' ('OK ' + (Get-Item -LiteralPath $Zip).Length + ' bytes') }
+                else { P 'GATE-PULL' ('FAIL rc=' + $p.ExitCode + ' ' + (((Get-Content ($Zip + '.err') -EA 0) -join ' | '))); Remove-Item -LiteralPath $Zip -Force -EA 0 }
+            } else { P 'FALLBACK' 'no enroll key available - download by hand or add -EnrollKeyB64' }
         }
     }
     if (Test-Path $Zip) {

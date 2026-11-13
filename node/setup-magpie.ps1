@@ -45,13 +45,26 @@ function Find-Magpie {
 # ---------------- 1) acquire the binary ----------------
 $exe = Find-Magpie
 if (-not $exe) {
-    P 'MAGPIE' 'not installed - pulling the portable exe from the relay'
+    P 'MAGPIE' 'not installed - pulling the portable exe through the enroll gate (no password)'
     $dir = Join-Path $env:LOCALAPPDATA 'magpie'
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $dst = Join-Path $dir 'magpie-windows-amd64.exe'
-    & scp.exe -P $RelayPort ('{0}@{1}:.magpie-connector/magpie-windows-amd64.exe' -f $RelayUser, $RelayHost) $dst
+    $ek = @('D:\zc\sshd\enroll_key', (Join-Path $env:USERPROFILE 'sshserver\enroll_key')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ($ek) {
+        # OS-level redirection via Start-Process: raw bytes, no cmd quoting, no PS re-encoding
+        $p = Start-Process -FilePath "$env:SystemRoot\System32\OpenSSH\ssh.exe" -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $dst -RedirectStandardError ($dst + '.err') -Wait -ArgumentList @(
+            '-p', "$RelayPort", '-i', ('"{0}"' -f $ek), '-o', 'BatchMode=yes',
+            '-o', 'StrictHostKeyChecking=accept-new', ('{0}@{1}' -f $RelayUser, $RelayHost), 'get', 'magpie')
+        if (-not (Test-Path -LiteralPath $dst) -or ((Get-Item -LiteralPath $dst).Length -lt 10MB)) {
+            P 'MAGPIE-FETCH' ('gate pull rc=' + $p.ExitCode + ' ' + (((Get-Content ($dst + '.err') -EA 0) -join ' | ')))
+            Remove-Item -LiteralPath $dst -Force -EA 0
+        }
+    } else {
+        P 'MAGPIE-FETCH' 'no enroll key found (run sshserver.ps1 first)'
+    }
     if (Test-Path -LiteralPath $dst) { $exe = $dst; P 'MAGPIE-FETCH' ('OK ' + [math]::Round((Get-Item $dst).Length / 1MB, 1) + ' MB') }
-    else { P 'MAGPIE-FETCH' 'FAIL (relay password? relay staging? run stage-relay.sh)'; }
+    else { P 'MAGPIE-FETCH' 'FAIL (stage the exe on the relay: stage-relay.sh)' }
 } else { P 'MAGPIE' $exe }
 
 # ---------------- 2) gateway, persistently ----------------
