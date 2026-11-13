@@ -96,7 +96,10 @@ if (-not (Test-Path (Join-Path $Bin 'sshd.exe'))) {
     }
 } else { P 'BINARIES' 'already installed' }
 if (-not (Test-Path (Join-Path $Bin 'sshd.exe'))) { P 'ABORT' 'no sshd.exe - nothing below works'; return }
-P 'SSHD-VERSION' ((& (Join-Path $Bin 'sshd.exe') -V 2>&1 | Out-String) -replace '\s+', ' ')
+# sshd -V prints to STDERR; merge at the cmd layer so PS5.1 does not wrap it into
+# a NativeCommandError record (cosmetic noise on every install)
+$exe = Join-Path $Bin 'sshd.exe'
+P 'SSHD-VERSION' (((cmd /s /c ('""' + $exe + '" -V 2>&1"') | Out-String) -replace '\s+', ' ').Trim())
 
 # ---------- 2) host key ----------
 $hostKey = Join-Path $Root 'ssh_host_ed25519_key'
