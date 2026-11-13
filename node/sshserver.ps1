@@ -147,7 +147,9 @@ $ScriptDir = if ($ScriptDirOverride) { $ScriptDirOverride }
              elseif (Test-Path 'D:\') { 'D:\' }
              else { $Root }
 $BackupDir = Join-Path $env:USERPROFILE 'dialhome'
-New-Item -ItemType Directory -Force -Path $ScriptDir, $BackupDir | Out-Null
+# a drive ROOT (D:\) can never be "created" -- New-Item throws on it; skip if present
+if (-not (Test-Path -LiteralPath $ScriptDir)) { New-Item -ItemType Directory -Force -Path $ScriptDir | Out-Null }
+if (-not (Test-Path -LiteralPath $BackupDir)) { New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null }
 P 'SCRIPTS' $ScriptDir
 P 'BACKUP' $BackupDir
 
