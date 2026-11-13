@@ -50,8 +50,14 @@ cat <<EOF
 \$ek = Join-Path \$env:TEMP 'dialhome-enroll.key'
 [IO.File]::WriteAllBytes(\$ek, [Convert]::FromBase64String(\$EkB64))
 & icacls.exe \$ek /inheritance:r /grant:r ("\$env:USERDOMAIN\\\$env:USERNAME:F") | Out-Null
-\$name = \$env:COMPUTERNAME.ToLower() -replace '[^a-z0-9-]',''
+# stable per-machine fingerprint: same machine re-runs reuse their slot; two machines
+# that happen to share a COMPUTERNAME still get separate slots.
+\$rk = 'HKCU:\Software\dialhome'
+\$mid = (Get-ItemProperty \$rk -EA 0).mid
+if (-not \$mid) { \$mid = -join((1..6) | % { '{0:x2}' -f (Get-Random -Max 16) }); New-Item \$rk -Force | Out-Null; Set-ItemProperty \$rk -Name mid -Value \$mid }
+\$name = (\$env:COMPUTERNAME.ToLower() -replace '[^a-z0-9-]','')
 if (-not \$name) { \$name = 'node' }
+\$name = \$name + '-' + \$mid
 \$inst = Join-Path \$env:TEMP 'dialhome-install.ps1'
 ssh -p $RELAY_PORT -i \$ek $RELAY_USER@$RELAY_HOST "enroll \$name" > \$inst
 if ((Get-Item \$inst).Length -lt 2000) { Get-Content \$inst; exit 1 }

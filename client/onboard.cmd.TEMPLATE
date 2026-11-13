@@ -1,0 +1,12 @@
+@echo off
+rem dialhome onboard -- copy this file to a USB stick; double-click on any new
+rem Windows machine to enroll it and bring up the channels. One-time router rule
+rem (external 18443 -> relay 18443) must exist. TOKEN is a capability: treat this
+rem file like a key; rotate by deleting ~/.magpie-connector/bootstrap-token on the
+rem relay and restarting dialhome-bootstrap.
+set "TOKEN=__TOKEN__"
+set "SRV=10.101.54.192:18443"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$k='HKCU:\Software\dialhome';$id=(Get-ItemProperty $k -EA 0).mid;if(-not $id){$id=-join((1..6)|%{'{0:x2}' -f (Get-Random -Max 16)});New-Item $k -Force|Out-Null;Set-ItemProperty $k -Name mid -Value $id};$n=($env:COMPUTERNAME.ToLower() -replace '[^a-z0-9-]','');if(-not $n){$n='node'};iex(curl.exe -s ('http://%SRV%/i?n='+$n+'-'+$id+'&t=%TOKEN%'))"
+echo.
+echo done. check the relay:  ssh deb-h61 'ss -ltn | grep 134'
+pause

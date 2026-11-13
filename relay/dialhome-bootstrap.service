@@ -1,0 +1,15 @@
+[Unit]
+Description=dialhome bootstrap server (one public port that onboards new nodes)
+After=network.target
+
+[Service]
+User=user
+Group=user
+ExecStart=/usr/bin/python3 /home/user/.magpie-connector/bootstrap-server.py 18443 0.0.0.0
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

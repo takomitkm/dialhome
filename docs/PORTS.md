@@ -42,6 +42,29 @@
 
 真要说上限：`permitlisten` 端口段用完后换一段即可；relay 端 fd 才是实际天花板（数百级）。
 
+## bootstrap 端口（18443）：最后一个需要路由器映射的端口
+
+`relay/bootstrap-server.py`（systemd 单元 `dialhome-bootstrap.service`，已部署）是
+**面向校园网的"开机注册口"**：
+
+```
+新机 PowerShell 一行:
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "iex(curl.exe -s 'http://10.101.54.192:18443/i?n=<名>&t=<token>')"
+或 USB 上的 client\onboard.cmd（双击即用，token 已内嵌）
+```
+
+| 要点 | 说明 |
+|---|---|
+| 需要的路由器规则 | **一次**：外部 `18443` → `192.168.1.102:18443`。此后加机器零路由器操作 |
+| token 就是能力 | `/i` 必须带 `?t=`；明文 HTTP 会嗅探 → **一轮接入完就换 token**（删 relay 的 `bootstrap-token` 重启服务） |
+| 限速 | 每 IP 每分钟 6 次；所有请求进 `bootstrap.log` |
+| 按请求发身份 | 每次成功请求 = enroll.sh 现场铸造一个节点（独立 key + 独立端口对）；登记私钥**不下发** |
+| 名字冲突 | 客户端带 6 位稳定指纹（`HKCU\Software\dialhome\mid`）：同名主机不同机器 → 不同槽位；同一台重跑 → 复用原槽位 |
+| 容量 | 池 `13440–13600` = 80 对；`PORT_TOP` 可扩；真正天花板是 relay fd（数百台） |
+
+⚠️ 该端口监听 `0.0.0.0`（家里 LAN 也能直连），没有 token 只会得到 403/bad token；
+ `/healthz` 无需 token（只回 "ok"）。
+
 ## 为什么不把节点端口直接映射到路由器
 
 因为那会让**每一台** Windows 的 sshd 暴露在校园网上。本方案里 Windows 的 sshd 只绑
