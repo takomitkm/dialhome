@@ -53,7 +53,12 @@ ssh deb-h61 'bash -s' < relay/stage-relay.sh   # 校验并放置 OpenSSH zip / �
 ### 1) 任何一台新机：**同一行**（按 COMPUTERNAME 自动区分）
 
 ```powershell
-ssh -p 18322 user@10.101.54.192 "bash ~/.magpie-connector/enroll.sh $env:COMPUTERNAME" > "$env:TEMP\enroll.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\enroll.ps1"
+`powershell
+iex(curl.exe -s 'http://10.101.54.192:18443/i?t=<TOKEN>')
+`
+
+需要先把路由器的 18443 映射到 relay（一次性，见 PORTS.md）。token 就是能力：一轮接入完就换。
+不想用公开口的话，用 USB 上的 client/onboard.cmd 或 Desktop\dialhome-magic.ps1（走 SSH 通道，不经过 18443）。
 ```
 
 问一次 102 密码 → relay 现场发身份（独立 key + 独立回环端口对，幂等复用）→
