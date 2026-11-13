@@ -86,12 +86,17 @@ else
 fi
 
 # ---------- emit the installer (stdout only) ----------
+# sshserver.ps1 is embedded inline so the node needs exactly ONE password prompt (this enroll
+# call); fetching it separately would ask for the 102 password a second time.
+SSHSERVER="$BASE/sshserver.ps1"
+[ -f "$SSHSERVER" ] || die "sshserver.ps1 missing on the relay: $SSHSERVER (copy it from the repo)"
+SSHSERVER_B64="$(base64 -w0 "$SSHSERVER")"
 KEY_B64="$(base64 -w0 "$KEY")"
 cat <<EOF
 \$ErrorActionPreference = 'Continue'
 \$KeyB64 = '$KEY_B64'
+\$Src = '$SSHSERVER_B64'
 \$tmp = Join-Path \$env:TEMP 'sshserver.ps1'
-ssh -p $RELAY_PORT $RELAY_USER@$RELAY_HOST "cat ~/.magpie-connector/sshserver.ps1" > \$tmp
-if (-not (Test-Path \$tmp)) { Write-Output 'ENROLL = FAIL could not fetch sshserver.ps1'; exit 1 }
+[IO.File]::WriteAllBytes(\$tmp, [Convert]::FromBase64String(\$Src))
 & powershell -NoProfile -ExecutionPolicy Bypass -File \$tmp -KeyB64 \$KeyB64 -RemotePort $SSH_PORT -MagpiePort $MAG_PORT -RelayHost $RELAY_HOST -RelayPort $RELAY_PORT -RelayUser $RELAY_USER
 EOF
