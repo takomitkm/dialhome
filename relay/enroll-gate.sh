@@ -26,6 +26,10 @@ case "$orig" in
         args="$(printf '%s' "$orig" | sed 's/^enroll //')"
         name="$(printf '%s' "$args" | cut -d' ' -f1 | tr -cd 'a-z0-9-')"
         fp="$(printf '%s' "$args" | cut -d' ' -s -f2 | tr -cd 'a-f0-9' | cut -c1-32)"
+        mode="$(printf '%s' "$args" | cut -d' ' -s -f3)"; [ "$mode" = "ps" ] || [ "$mode" = "tmp" ] || mode=""
+        mag="$(printf '%s' "$args" | cut -d' ' -s -f4)";  [ "$mag" = "1" ] || mag=""
+        glm="$(printf '%s' "$args" | cut -d' ' -s -f5)";  [ "$glm" = "1" ] || glm=""
+        quiet="$(printf '%s' "$args" | cut -d' ' -s -f6)"; [ "$quiet" = "1" ] || quiet=""
         [ -n "$name" ] || { echo 'DENY: empty name'; exit 1; }
         # The hardware fingerprint decides the slot, not the requested name: the same
         # machine re-appearing from a new IP / with a new hostname re-uses its existing
@@ -52,7 +56,7 @@ PY
 )"
             name="$(printf '%s' "$name" | tail -1)"
         fi
-        exec bash "$BASE/enroll.sh" "$name"
+        exec bash "$BASE/enroll.sh" "$name" "$fp" "$mode" "$mag" "$glm" "$quiet"
         ;;
     get\ sshserver)
         [ -f "$BASE/sshserver.ps1" ] && { exec cat "$BASE/sshserver.ps1"; }

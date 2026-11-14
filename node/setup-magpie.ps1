@@ -1,4 +1,4 @@
-# setup-magpie.ps1 -- fixed flow for the magpie side of a node (item 1 of the checklist).
+﻿# setup-magpie.ps1 -- fixed flow for the magpie side of a node (item 1 of the checklist).
 #
 #   -Acquire   find magpie (or pull the portable exe from the relay), make the gateway run
 #              persistently via a user scheduled task ("serve" mode: no WebView2 needed)

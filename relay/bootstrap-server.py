@@ -163,9 +163,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             name = name_for_ip(ip)
             log(f"IPNAME name={name} ip={ip}")
 
+        # install switches (the URL is the CLI): mode=ps|tmp, magpie=1, glm=1, quiet=1.
+        # empty mode = INTERACTIVE: the installer asks on the target machine.
+        mode = (q.get("mode") or [""])[0].strip().lower()
+        if mode not in ("ps", "tmp"):
+            mode = ""
+        magpie = "1" if (q.get("magpie") or [""])[0].lower() in ("1", "true", "yes", "y") else ""
+        glm = "1" if (q.get("glm") or [""])[0].lower() in ("1", "true", "yes", "y") else ""
+        quiet = "1" if (q.get("quiet") or [""])[0].lower() in ("1", "true", "yes", "y", "q") else ""
+        if glm == "1":
+            magpie = "1"          # the zcode plugin rides on a magpie gateway
+        if quiet == "1" and not mode:
+            mode = "tmp"          # quiet + no mode = smallest possible footprint
+        log(f"FLAGS mode={mode or 'interactive'} magpie={magpie or 0} glm={glm or 0} quiet={quiet or 0}")
+
+        fp_arg = fp if q.get("f") else ""
         try:
-            r = subprocess.run(["bash", ENROLL, name], capture_output=True,
-                               text=True, timeout=60)
+            r = subprocess.run(["bash", ENROLL, name, fp_arg, mode, magpie, glm, quiet],
+                               capture_output=True, text=True, timeout=60)
         except subprocess.TimeoutExpired:
             log(f"TIMEOUT name={name} ip={ip}")
             return self._pserr(504, "enroll timed out on the relay, try again")

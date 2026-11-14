@@ -20,6 +20,8 @@ relay 侧**不装任何自定义组件**（原版 sshd + `authorized_keys` 选�
 
 ---
 
+完整参数/模式文档（交互式、--ps/--tmp、--magpie/--glm、-q 的 man 页）：[docs/man-dialhome.md](docs/man-dialhome.md)
+
 ## 拓扑（一台 relay，N 台机器）
 
 ```

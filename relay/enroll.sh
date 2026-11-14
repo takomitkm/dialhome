@@ -18,6 +18,12 @@ set -eu
 RAW_NAME="${1:-node}"
 NAME="$(printf '%s' "$RAW_NAME" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9-')"
 [ -n "$NAME" ] || NAME="node"
+FP="${2:-}"
+MODE="${3:-}"; [ "$MODE" = "ps" ] || [ "$MODE" = "tmp" ] || MODE=""
+MAG="${4:-}";  [ "$MAG" = "1" ] || MAG=""
+GLM="${5:-}";  [ "$GLM" = "1" ] || GLM=""
+QUIET="${6:-}"; [ "$QUIET" = "1" ] || QUIET=""
+[ "$GLM" = "1" ] && MAG="1"          # the zcode plugin rides on a magpie gateway
 BASE="$HOME/.magpie-connector"
 AK="$HOME/.ssh/authorized_keys"
 CHECKER="$HOME/.local/bin/magpie-tunnel-check"
@@ -90,9 +96,16 @@ fi
 # ---------- emit the installer (stdout only) ----------
 # Everything is embedded inline: the node key AND the enroll key, so the node never asks for
 # the 102 password and can still pull the OpenSSH zip through the enroll gate if GitHub is slow.
+# MODE/MAG/GLM/QUIET come from the bootstrap URL (mode=ps|tmp, magpie=1, glm=1, quiet=1);
+# empty MODE means INTERACTIVE -- the installer asks on the target machine.
 SSHSERVER="$BASE/sshserver.ps1"
 [ -f "$SSHSERVER" ] || die "sshserver.ps1 missing on the relay: $SSHSERVER (copy it from the repo)"
 SSHSERVER_B64="$(base64 -w0 "$SSHSERVER")"
+SETUP_B64=''
+if [ "$MAG" = "1" ] || [ -z "$QUIET" ]; then
+    SETUPMAG="$BASE/setup-magpie.ps1"
+    [ -f "$SETUPMAG" ] && SETUP_B64="$(base64 -w0 "$SETUPMAG")"
+fi
 KEY_B64="$(base64 -w0 "$KEY")"
 EK_B64=''
 [ -f "$HOME/.ssh/dialhome_enroll" ] && EK_B64="$(base64 -w0 "$HOME/.ssh/dialhome_enroll")"
@@ -100,8 +113,37 @@ cat <<EOF
 \$ErrorActionPreference = 'Continue'
 \$KeyB64 = '$KEY_B64'
 \$Src = '$SSHSERVER_B64'
+\$SetupSrc = '$SETUP_B64'
 \$EkB64 = '$EK_B64'
+\$UrlMode = '$MODE'
+\$UrlMagpie = '$MAG'
+\$UrlGlm = '$GLM'
+\$UrlQuiet = '$QUIET'
+# ---------- interactive Q&A (skipped when quiet=1 or every flag was given) ----------
+if (\$UrlQuiet -ne '1') {
+    if (-not \$UrlMode) { \$a = Read-Host '连接类型: 持久(开机自启+多地备份)[P] / 暂时(只拉回环,断了就断)[t] [P]'; if (\$a -match '^[tT]') { \$UrlMode = 'tmp' } else { \$UrlMode = 'ps' } }
+    if (-not \$UrlMagpie) { \$a = Read-Host '安装 magpie 网关? [y/N]'; if (\$a -match '^[yY]') { \$UrlMagpie = '1' } }
+    if (-not \$UrlGlm) { \$a = Read-Host '安装 zcode/GLM 插件(会一并安装 magpie)? [y/N]'; if (\$a -match '^[yY]') { \$UrlGlm = '1'; \$UrlMagpie = '1' } }
+}
+if (-not \$UrlMode) { \$UrlMode = 'tmp' }   # quiet + no mode = smallest possible footprint
 \$tmp = Join-Path \$env:TEMP 'sshserver.ps1'
 [IO.File]::WriteAllBytes(\$tmp, [Convert]::FromBase64String(\$Src))
-& powershell -NoProfile -ExecutionPolicy Bypass -File \$tmp -KeyB64 \$KeyB64 -EnrollKeyB64 \$EkB64 -RemotePort $SSH_PORT -MagpiePort $MAG_PORT -RelayHost $RELAY_HOST -RelayPort $RELAY_PORT -RelayUser $RELAY_USER
+\$out = & powershell -NoProfile -ExecutionPolicy Bypass -File \$tmp -KeyB64 \$KeyB64 -EnrollKeyB64 \$EkB64 -RemotePort $SSH_PORT -MagpiePort $MAG_PORT -RelayHost $RELAY_HOST -RelayPort $RELAY_PORT -RelayUser $RELAY_USER -InstallMode \$UrlMode 2>&1
+\$out | ForEach-Object { Write-Host \$_ }
+\$tunPath = ''
+foreach (\$line in @(\$out)) { \$s = [string]\$_; if (\$s -like 'TUNNEL-SCRIPT = *') { \$tunPath = \$s.Substring(16) } }
+if (\$UrlMagpie -eq '1' -and \$SetupSrc) {
+    \$sm = Join-Path \$env:TEMP 'setup-magpie.ps1'
+    [IO.File]::WriteAllBytes(\$sm, [Convert]::FromBase64String(\$SetupSrc))
+    \$smArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', \$sm, '-Acquire', '-RelayHost', '$RELAY_HOST', '-RelayPort', '$RELAY_PORT', '-RelayUser', '$RELAY_USER')
+    if (\$UrlGlm -eq '1') { \$smArgs += @('-Plugin', '-Login') }
+    Write-Host '[dialhome] installing magpie...'
+    & powershell @smArgs
+}
+if (\$UrlMode -eq 'tmp') {
+    Write-Host '[dialhome] 暂时连接: 隧道前台运行, Ctrl+C 或关窗即断开'
+    if (\$tunPath) { & powershell -NoProfile -ExecutionPolicy Bypass -File \$tunPath }
+} else {
+    Write-Host '[dialhome] 持久连接完成: 自启动已注册, D:\ 脚本与 C:\ 备份已就位'
+}
 EOF
