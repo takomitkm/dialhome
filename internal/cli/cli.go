@@ -23,9 +23,9 @@ func Run(argv []string) error {
 	case "controller":
 		return runController(rest)
 	case "relay":
-		return runRelay(rest)
+		return runRelayImpl(rest)
 	case "relay-helper":
-		return runRelayHelper(rest)
+		return runRelayHelperImpl(rest)
 	case "autostart":
 		return runAutostart(rest)
 	case "service":
@@ -95,22 +95,6 @@ func runController(args []string) error {
 	default:
 		return fmt.Errorf("%w: unknown controller subcommand %q", errs.ErrUsage, args[0])
 	}
-}
-
-func runRelay(args []string) error {
-	if len(args) == 0 {
-		return usage()
-	}
-	switch args[0] {
-	case "init", "enroll", "list", "inspect", "revoke", "reconcile", "ports", "verify", "credentials":
-		return fmt.Errorf("%w: relay %s lands in Phase 4", errs.ErrNotImplemented, args[0])
-	default:
-		return fmt.Errorf("%w: unknown relay subcommand %q", errs.ErrUsage, args[0])
-	}
-}
-
-func runRelayHelper(args []string) error {
-	return fmt.Errorf("%w: relay-helper lands in Phase 4", errs.ErrNotImplemented)
 }
 
 func runAutostart(args []string) error {
