@@ -83,12 +83,12 @@ func fromSeed(priv ed25519.PrivateKey, pub ed25519.PublicKey, comment string) (K
 
 	var w bytes.Buffer
 	w.WriteString(magic)
-	writeString(&w, []byte("none"))   // ciphername
-	writeString(&w, []byte("none"))   // kdfname
-	writeString(&w, nil)              // kdfoptions
-	writeUint32(&w, 1)                // number of keys
-	writeString(&w, pubBlob)          // public key
-	writeString(&w, sec.Bytes())      // private section
+	writeString(&w, []byte("none")) // ciphername
+	writeString(&w, []byte("none")) // kdfname
+	writeString(&w, nil)            // kdfoptions
+	writeUint32(&w, 1)              // number of keys
+	writeString(&w, pubBlob)        // public key
+	writeString(&w, sec.Bytes())    // private section
 
 	armoured := armour(w.Bytes())
 	return KeyPair{

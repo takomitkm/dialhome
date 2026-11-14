@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/takomitkm/dialhome/internal/platform"
 )
 
 const Version = 1
@@ -46,10 +48,10 @@ type SSHD struct {
 }
 
 type Retry struct {
-	BaseSeconds    int `json:"base_seconds"`
-	MaxSeconds     int `json:"max_seconds"`
-	FailsToHourly  int `json:"fails_to_hourly"`
-	HourlySeconds  int `json:"hourly_seconds"`
+	BaseSeconds   int `json:"base_seconds"`
+	MaxSeconds    int `json:"max_seconds"`
+	FailsToHourly int `json:"fails_to_hourly"`
+	HourlySeconds int `json:"hourly_seconds"`
 }
 
 type Keepalive struct {
@@ -58,10 +60,10 @@ type Keepalive struct {
 }
 
 type Supervisor struct {
-	BootWaitMaxSeconds int        `json:"boot_wait_max_seconds"`
-	Retry              Retry      `json:"retry"`
-	Keepalive          Keepalive  `json:"keepalive"`
-	ConnectTimeout     int        `json:"connect_timeout_seconds"`
+	BootWaitMaxSeconds int       `json:"boot_wait_max_seconds"`
+	Retry              Retry     `json:"retry"`
+	Keepalive          Keepalive `json:"keepalive"`
+	ConnectTimeout     int       `json:"connect_timeout_seconds"`
 }
 
 type Register struct {
@@ -70,12 +72,12 @@ type Register struct {
 }
 
 type Node struct {
-	Name      string   `json:"name"`
-	Relay     RelayAddr `json:"relay"`
-	SSHD      SSHD     `json:"sshd"`
-	Channels  []Channel `json:"channels"`
-	Mode      string   `json:"mode"`
-	Register  Register `json:"register"`
+	Name     string    `json:"name"`
+	Relay    RelayAddr `json:"relay"`
+	SSHD     SSHD      `json:"sshd"`
+	Channels []Channel `json:"channels"`
+	Mode     string    `json:"mode"`
+	Register Register  `json:"register"`
 }
 
 type NodeConfig struct {
@@ -158,7 +160,9 @@ func Save(path string, cfg *NodeConfig) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
+	// 0600-equivalent on every OS: unix chmod, Windows icacls (strip inheritance).
+	// os.Chmod alone is a no-op on NTFS.
+	if err := platform.HardenFile(tmpName); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, path)

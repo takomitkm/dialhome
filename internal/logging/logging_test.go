@@ -10,10 +10,10 @@ import (
 func TestRedactCoversContractShapes(t *testing.T) {
 	cases := map[string]string{
 		"-----BEGIN OPENSSH PRIVATE KEY-----\nabc\ndef\n-----END OPENSSH PRIVATE KEY-----": "[REDACTED]",
-		"token sk-Abc123XYZ_more":                                                         "token [REDACTED]",
-		"Authorization: Bearer eyJhbGciOiXYZ123":                                          "Authorization: [REDACTED]",
-		"pub AAAAC3NzaC1lZDI1NTE5AAAAIAbc123 injected":                                    "pub [REDACTED] injected",
-		"sha 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef":            "sha [REDACTED]",
+		"token sk-Abc123XYZ_more":                                              "token [REDACTED]",
+		"Authorization: Bearer eyJhbGciOiXYZ123":                               "Authorization: [REDACTED]",
+		"pub AAAAC3NzaC1lZDI1NTE5AAAAIAbc123 injected":                         "pub [REDACTED] injected",
+		"sha 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef": "sha [REDACTED]",
 	}
 	for in, want := range cases {
 		got := Redact(in)

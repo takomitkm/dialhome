@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -85,9 +86,11 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
 		t.Fatalf("saved perms = %v, want 0600", st.Mode().Perm())
 	}
+	// windows: perms come from the NTFS ACL (internal/platform harden_windows);
+	// ACL shape asserted in platform package tests.
 	got, err := Load(p)
 	if err != nil {
 		t.Fatal(err)

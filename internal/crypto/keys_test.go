@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	"encoding/base64"
 	"strings"
 	"testing"
 )

@@ -10,13 +10,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 )
 
 var (
 	redactors = []struct{ re *regexp.Regexp }{
-		{regexp.MustCompile(`-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----`)},
+		{regexp.MustCompile(`(?s)-----BEGIN [A-Z ]+PRIVATE KEY-----.*?-----END [A-Z ]+PRIVATE KEY-----`)},
+		// truncated dumps: a BEGIN with no END on the same line still carries the body
+		{regexp.MustCompile(`-----BEGIN [A-Z ]+PRIVATE KEY-----.*`)},
 		{regexp.MustCompile(`(?i)sk-[A-Za-z0-9_-]{8,}`)},
 		{regexp.MustCompile(`(?i)bearer [A-Za-z0-9._-]{8,}`)},
 		{regexp.MustCompile(`AAAAC3NzaC1lZDI1NTE5[A-Za-z0-9+/=]+`)},
@@ -96,10 +97,13 @@ func (r *rotator) Write(p []byte) (int, error) {
 			return 0, err
 		}
 	}
-	n, err := r.f.Write(p)
+	// last-line defence: redact the serialized line (covers msg and any attr the
+	// handler does not route through ReplaceAttr, e.g. multi-line private keys)
+	clean := []byte(Redact(string(p)))
+	n, err := r.f.Write(clean)
 	r.size += int64(n)
 	if r.mirror {
-		os.Stderr.Write(p)
+		os.Stderr.Write(clean)
 	}
 	return n, err
 }
@@ -126,7 +130,7 @@ func (r *rotator) rotateLocked() error {
 	// shift old files: name.log.2 -> .3, .1 -> .2, current -> .1
 	for i := r.keep - 1; i >= 1; i-- {
 		src := r.path + rotateSuffix(i)
-		dst := r.path + rotateSuffix(i + 1)
+		dst := r.path + rotateSuffix(i+1)
 		if _, err := os.Stat(src); err == nil {
 			os.Remove(dst)
 			os.Rename(src, dst)
